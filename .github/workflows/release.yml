@@ -30,7 +30,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AutoMouse-macos
-          path: dist/AutoMouse.app
+          path: dist/AutoMouse
 
   build-windows:
     runs-on: windows-latest
@@ -79,9 +79,8 @@ jobs:
       - name: Create macOS zip
         run: |
           cd release/macos
-          mv AutoMouse.app AutoMouse 2>/dev/null || true
-          cd ..
-          zip -r macos/AutoMouse-macos.zip macos/AutoMouse
+          # The artifact is named AutoMouse (which is the .app bundle)
+          zip -r ../macos/AutoMouse-macos.zip AutoMouse
 
       - name: Create Windows zip
         run: |
