@@ -25,14 +25,12 @@ jobs:
         run: |
           pip install pyinstaller
           pyinstaller auto_mouse.spec --clean
-          mkdir -p dist/macos
-          mv dist/AutoMouse dist/macos/
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: AutoMouse-macos
-          path: dist/macos/AutoMouse.app
+          path: dist/AutoMouse.app
 
   build-windows:
     runs-on: windows-latest
@@ -52,14 +50,12 @@ jobs:
         run: |
           pip install pyinstaller
           pyinstaller auto_mouse.spec --clean
-          mkdir -p dist/windows
-          mv dist/AutoMouse dist/windows/
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: AutoMouse-windows
-          path: dist/windows/AutoMouse
+          path: dist/AutoMouse
 
   release:
     needs: [build-macos, build-windows]
@@ -83,14 +79,14 @@ jobs:
       - name: Create macOS zip
         run: |
           cd release/macos
-          zip -r AutoMouse-macos.zip AutoMouse.app
-          cd ../..
+          mv AutoMouse.app AutoMouse 2>/dev/null || true
+          cd ..
+          zip -r macos/AutoMouse-macos.zip macos/AutoMouse
 
       - name: Create Windows zip
         run: |
           cd release/windows
-          powershell -Command "Compress-Archive -Path AutoMouse -DestinationPath AutoMouse-windows.zip -Force"
-          cd ../..
+          powershell -Command "Compress-Archive -Path AutoMouse -DestinationPath ../windows/AutoMouse-windows.zip -Force"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
