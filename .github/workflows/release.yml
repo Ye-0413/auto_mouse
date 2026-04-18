@@ -97,7 +97,7 @@ jobs:
       - name: Create Windows zip
         run: |
           cd release/windows
-          powershell -Command "Compress-Archive -Path . -DestinationPath ../windows/AutoMouse-windows.zip -Force"
+          pwsh -Command "Compress-Archive -Path . -DestinationPath ../windows/AutoMouse-windows.zip -Force"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
