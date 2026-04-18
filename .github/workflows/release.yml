@@ -1,0 +1,103 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Build macOS app
+        run: |
+          pip install pyinstaller
+          pyinstaller auto_mouse.spec --clean
+          mkdir -p dist/macos
+          mv dist/AutoMouse dist/macos/
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoMouse-macos
+          path: dist/macos/AutoMouse.app
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Build Windows exe
+        run: |
+          pip install pyinstaller
+          pyinstaller auto_mouse.spec --clean --win-private-assemblies
+          mkdir -p dist/windows
+          mv dist/AutoMouse dist/windows/
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoMouse-windows
+          path: dist/windows/AutoMouse.exe
+
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AutoMouse-macos
+          path: release/macos
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AutoMouse-windows
+          path: release/windows
+
+      - name: Create macOS zip
+        run: |
+          cd release/macos
+          zip -r AutoMouse-macos.zip AutoMouse.app
+          cd ../..
+
+      - name: Create Windows zip
+        run: |
+          cd release/windows
+          zip -r AutoMouse-windows.zip AutoMouse.exe
+          cd ../..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/macos/AutoMouse-macos.zip
+            release/windows/AutoMouse-windows.zip
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
