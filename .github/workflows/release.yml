@@ -51,7 +51,7 @@ jobs:
       - name: Build Windows exe
         run: |
           pip install pyinstaller
-          pyinstaller auto_mouse.spec --clean --win-private-assemblies
+          pyinstaller auto_mouse.spec --clean
           mkdir -p dist/windows
           mv dist/AutoMouse dist/windows/
 
@@ -59,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AutoMouse-windows
-          path: dist/windows/AutoMouse.exe
+          path: dist/windows/AutoMouse
 
   release:
     needs: [build-macos, build-windows]
@@ -89,7 +89,7 @@ jobs:
       - name: Create Windows zip
         run: |
           cd release/windows
-          zip -r AutoMouse-windows.zip AutoMouse.exe
+          powershell -Command "Compress-Archive -Path AutoMouse -DestinationPath AutoMouse-windows.zip -Force"
           cd ../..
 
       - name: Create Release
