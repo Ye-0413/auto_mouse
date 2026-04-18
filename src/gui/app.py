@@ -127,11 +127,17 @@ class AutoMouseApp:
         self.stop_btn = ttk.Button(control_frame, text="Stop", command=self._on_stop, state="disabled")
         self.stop_btn.grid(row=0, column=2, padx=2)
 
-        ttk.Label(control_frame, text="Speed:").grid(row=0, column=3, padx=(20, 5))
+        ttk.Label(control_frame, text="Speed:").grid(row=0, column=3, padx=(15, 5))
         self.speed_var = tk.StringVar(value="1.0")
         speed_combo = ttk.Combobox(control_frame, textvariable=self.speed_var, values=["0.5", "1.0", "2.0", "5.0"], width=5)
         speed_combo.grid(row=0, column=4, padx=2)
         speed_combo.bind("<<ComboboxSelected>>", self._on_speed_change)
+
+        ttk.Label(control_frame, text="Loop:").grid(row=0, column=5, padx=(15, 5))
+        self.loop_var = tk.StringVar(value="1")
+        loop_spin = ttk.Spinbox(control_frame, from_=1, to=100, textvariable=self.loop_var, width=5)
+        loop_spin.grid(row=0, column=6, padx=2)
+        ttk.Label(control_frame, text="(1-100, 0=∞)").grid(row=0, column=7, padx=(0, 5))
 
         # Timeline canvas
         timeline_frame = ttk.LabelFrame(right_frame, text="Timeline", padding="10")
@@ -468,12 +474,26 @@ class AutoMouseApp:
             recording = self.storage.load(self.selected_recording)
             self.playback_engine = PlaybackEngine(recording)
             self.playback_engine.set_speed(float(self.speed_var.get()))
+
+            # Set loop count
+            loop_str = self.loop_var.get().strip()
+            if loop_str == "0" or loop_str.lower() == "inf":
+                self.playback_engine.set_loop_count(0)  # Infinite
+            else:
+                try:
+                    loop_count = int(loop_str)
+                    self.playback_engine.set_loop_count(max(1, min(loop_count, 100)))
+                except ValueError:
+                    self.playback_engine.set_loop_count(1)
+
             self.playback_engine.set_on_progress(self._on_playback_progress)
+            self.playback_engine.set_on_loop_complete(self._on_loop_complete)
             self.playback_engine.play()
 
             self.pause_btn.config(state="normal", text="Pause")
             self.stop_btn.config(state="normal")
-            self.status_label.config(text="Playing...")
+            loop_info = f" (loop {self.playback_engine.get_loop_count()}x)" if self.playback_engine.get_loop_count() > 0 else " (∞)"
+            self.status_label.config(text=f"Playing{loop_info}...")
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to play: {e}")
@@ -507,11 +527,17 @@ class AutoMouseApp:
         if self.playback_engine:
             self.playback_engine.set_speed(float(self.speed_var.get()))
 
-    def _on_playback_progress(self, current_time: float, current_index: int, total: int) -> None:
+    def _on_playback_progress(self, current_time: float, current_index: int, total: int, current_loop: int = 1) -> None:
         """Handle playback progress updates."""
+        loop_info = f" [{current_loop}/{self.playback_engine.get_loop_count()}]" if self.playback_engine.get_loop_count() > 0 else ""
         self.root.after(0, lambda: self.status_label.config(
-            text=f"Playing: {current_time:.1f}s ({current_index}/{total})"
+            text=f"Playing{loop_info}: {current_time:.1f}s ({current_index}/{total})"
         ))
+
+    def _on_loop_complete(self, completed_loop: int, total_loops: int) -> None:
+        """Handle loop completion."""
+        loop_info = f"Loop {completed_loop}/{total_loops}" if total_loops > 0 else "Loop complete"
+        self.root.after(0, lambda: self.status_label.config(text=loop_info))
 
     def run(self) -> None:
         """Start the application main loop."""

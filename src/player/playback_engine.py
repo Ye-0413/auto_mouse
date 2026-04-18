@@ -38,12 +38,15 @@ class PlaybackEngine:
         self.events: List[Event] = []
         self._state = PlaybackState.STOPPED
         self._speed = 1.0
+        self._loop_count = 1  # Number of times to replay
+        self._current_loop = 1
         self._current_index = 0
         self._executor = ActionExecutor()
         self._play_thread: Optional[threading.Thread] = None
         self._pause_event = threading.Event()
         self._pause_event.set()  # Not paused initially
-        self._on_progress: Optional[Callable[[float, int, int], None]] = None
+        self._on_progress: Optional[Callable[[float, int, int, int], None]] = None
+        self._on_loop_complete: Optional[Callable[[int, int], None]] = None
 
         # Parse events
         self._parse_events()
@@ -90,9 +93,31 @@ class PlaybackEngine:
         """Set the playback speed multiplier."""
         self._speed = max(0.1, min(speed, 10.0))
 
-    def set_on_progress(self, callback: Callable[[float, int, int], None]) -> None:
-        """Set a callback for playback progress updates."""
+    def set_loop_count(self, count: int) -> None:
+        """Set the number of times to replay the recording.
+
+        Args:
+            count: Number of loops (1-100). Use 0 for infinite loop.
+        """
+        self._loop_count = max(1, min(count, 100))
+
+    def get_loop_count(self) -> int:
+        """Get the current loop count setting."""
+        return self._loop_count
+
+    def set_on_progress(self, callback: Callable[[float, int, int, int], None]) -> None:
+        """Set a callback for playback progress updates.
+
+        Callback receives: (current_time, current_index, total_events, current_loop)
+        """
         self._on_progress = callback
+
+    def set_on_loop_complete(self, callback: Callable[[int, int], None]) -> None:
+        """Set a callback for loop completion.
+
+        Callback receives: (completed_loop, total_loops)
+        """
+        self._on_loop_complete = callback
 
     def play(self) -> None:
         """Start or resume playback."""
@@ -151,38 +176,62 @@ class PlaybackEngine:
 
     def _play_loop(self) -> None:
         """Main playback loop running in a background thread."""
-        start_time = time.perf_counter()
+        self._current_loop = 1
+        loop_infinite = self._loop_count == 0
 
-        while self._current_index < len(self.events) and self._state != PlaybackState.STOPPED:
-            # Check if paused
-            self._pause_event.wait()
-
-            if self._state == PlaybackState.STOPPED:
+        while self._state != PlaybackState.STOPPED:
+            if not loop_infinite and self._current_loop > self._loop_count:
                 break
 
-            event = self.events[self._current_index]
+            start_time = time.perf_counter()
+            self._current_index = 0
 
-            # Calculate when this event should fire
-            event_time = event.timestamp / self._speed
-            elapsed = time.perf_counter() - start_time
+            # Loop start callback
+            if self._current_loop > 1:
+                if self._on_loop_complete:
+                    self._on_loop_complete(self._current_loop - 1, self._loop_count)
 
-            if elapsed < event_time:
-                # Sleep until it's time for this event
-                sleep_time = (event_time - elapsed) / self._speed
-                time.sleep(max(0.001, sleep_time))
+            while self._current_index < len(self.events) and self._state != PlaybackState.STOPPED:
+                # Check if paused
+                self._pause_event.wait()
 
-            # Execute the event
-            self._execute_event(event)
+                if self._state == PlaybackState.STOPPED:
+                    break
 
-            # Progress callback
-            if self._on_progress:
-                self._on_progress(self.current_time, self._current_index, len(self.events))
+                event = self.events[self._current_index]
 
-            self._current_index += 1
+                # Calculate when this event should fire
+                event_time = event.timestamp / self._speed
+                elapsed = time.perf_counter() - start_time
+
+                if elapsed < event_time:
+                    # Sleep until it's time for this event
+                    sleep_time = (event_time - elapsed) / self._speed
+                    time.sleep(max(0.001, sleep_time))
+
+                # Execute the event
+                self._execute_event(event)
+
+                # Progress callback
+                if self._on_progress:
+                    self._on_progress(
+                        self.current_time,
+                        self._current_index,
+                        len(self.events),
+                        self._current_loop
+                    )
+
+                self._current_index += 1
+
+            if loop_infinite:
+                self._current_loop += 1
+            else:
+                self._current_loop += 1
 
         # Playback complete
-        if self._current_index >= len(self.events):
-            self._state = PlaybackState.STOPPED
+        self._state = PlaybackState.STOPPED
+        if self._on_loop_complete:
+            self._on_loop_complete(self._current_loop - 1, self._loop_count)
 
     def _execute_event(self, event: Event) -> None:
         """Execute a single event."""
