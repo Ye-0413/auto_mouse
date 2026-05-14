@@ -4,3 +4,4 @@ openpyxl>=3.1
 platformdirs>=4.2
 pyautogui>=0.9.53
 pyperclip>=1.8.2
+# 可选：浏览器步骤（Playwright CDP）— pip install 'anything-auto[browser]' 并执行 playwright install chromium
