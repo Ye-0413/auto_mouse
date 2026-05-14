@@ -2277,3 +2277,11 @@ OCR
 复杂流程编辑器
 多应用高级控制
 
+---
+
+## 本仓库应用（Anything Auto）本地运行
+
+- 安装：在项目根目录执行 `pip install -r requirements.txt`；运行测试还需 `pip install -e ".[dev]"`（或单独安装 `pytest`）。
+- 启动界面： `python main.py`。
+- 可选浏览器步骤（流程类型 `pw_goto` / `pw_click_text`，经 Chrome DevTools CDP）：`pip install -e ".[browser]"`（或 `pip install playwright>=1.40`），再执行 `playwright install chromium`；默认 CDP 地址在配置中的 `browser_cdp_url`，也可在具体步骤的 `params.cdp_url` 中覆盖。
+- Windows 与 macOS：通用桌面步骤用 `pyautogui`；`activate_window` 仅在 Windows 上生效。Excel 批量执行过程中可按「停止」——在当前数据行执行结束后、下一行开始前停止循环。

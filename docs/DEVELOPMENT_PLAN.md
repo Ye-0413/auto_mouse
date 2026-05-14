@@ -181,3 +181,4 @@ flowchart LR
 ## 文档版本
 
 - **v0.1**：2026-05-14，初版（Planner + Code Architect 合成）。
+- **v0.2**：2026-05-14，与 `docs/PROJECT_CHARTER.md` 立项章程对齐；增补当前基线差分与首批 PR 锚点（见章程 §4）。
