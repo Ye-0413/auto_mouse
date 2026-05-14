@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_assistant.app.models.flow_dsl import validate_flow_definition
 from rpa_assistant.app.ui.flow.presentation import STEP_TYPE_LABELS
 
 # Order matches stack pages
@@ -39,6 +40,9 @@ _STEP_ORDER = [
     "set_variable",
     "click_mouse",
     "paste_clipboard",
+    "read_clipboard",
+    "clear_clipboard",
+    "clipboard_switch",
     "if",
     "note",
 ]
@@ -70,6 +74,18 @@ class StepEditorDialog(QDialog):
         self._original_id: str | None = step.get("id") if step else None
 
         layout = QVBoxLayout(self)
+
+        hint = QLabel(
+            "请按顺序：先选<b>步骤类型</b>，再填下面出现的参数。"
+            "文字里可写 <b>${变量名}</b>，由单次运行时的上下文替换（不再依赖 Excel 列）。"
+            "不确定可先随便填，保存后到「运行」页点「运行」验证。"
+        )
+        hint.setWordWrap(True)
+        hint.setOpenExternalLinks(False)
+        hint.setStyleSheet(
+            "color: palette(mid); padding: 4px 4px 8px 4px; font-size: 12px;",
+        )
+        layout.addWidget(hint)
 
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("可选：给这一步起个简短名字，便于辨认")
@@ -180,6 +196,58 @@ class StepEditorDialog(QDialog):
             ),
         )
 
+        read_clipboard_w = QWidget()
+        rcf = QFormLayout(read_clipboard_w)
+        self._clip_into = QLineEdit()
+        self._clip_into.setPlaceholderText("默认 _clipboard，可与「剪贴板关键词分支」配合")
+        self._clip_strip = QCheckBox("去掉首尾空白（strip）")
+        self._clip_strip.setChecked(True)
+        rcf.addRow("写入变量 into", self._clip_into)
+        rcf.addRow("", self._clip_strip)
+
+        clear_clipboard_w = QWidget()
+        ccb = QVBoxLayout(clear_clipboard_w)
+        ccb.addWidget(
+            QLabel("执行时用 pyperclip 将系统剪贴板置为空字符串。"),
+        )
+
+        clip_sw_w = QWidget()
+        clip_v = QVBoxLayout(clip_sw_w)
+        clip_v.addWidget(
+            QLabel(
+                "读取已写入流程变量的文本（通常上一步「读取剪贴板→变量」得到），"
+                "按规则的 <b>contains_any</b> 子串依次匹配：<b>先命中先执行</b>该规则的 "
+                "<b>steps</b>；若<strong>无任何规则命中</strong>，则<strong>立即静默结束整条流程"
+                "</strong>（不报错，后面的步骤也不再执行）。\n"
+                "关键词与支持 ${变量} 占位（在每条规则的对象里替换）。",
+            ),
+        )
+        clip_form = QFormLayout()
+        self._clip_switch_var = QLineEdit("_clipboard")
+        self._clip_switch_var.setPlaceholderText("流程变量名，默认 _clipboard")
+        self._clip_switch_ci = QCheckBox("子串匹配忽略大小写")
+        clip_form.addRow("待匹配变量 variable", self._clip_switch_var)
+        clip_form.addRow("", self._clip_switch_ci)
+        cfw = QWidget()
+        cfw.setLayout(clip_form)
+        clip_v.addWidget(cfw)
+        self._clip_rules_json = QPlainTextEdit()
+        self._clip_rules_json.setPlaceholderText(
+            '[\n  {"contains_any": ["高压供电", "工单"], '
+            '"steps": [{"type": "wait", "params": {"ms": 300}}]}\n]',
+        )
+        self._clip_rules_json.setMinimumHeight(120)
+        self._clip_rules_json.setAccessibleName("剪贴板关键词分支 rules")
+        self._clip_rules_json.setAccessibleDescription("JSON 数组；编辑时会提示语法是否与数组结构粗略匹配。")
+        clip_v.addWidget(QLabel('rules（JSON 数组：contains_any / contains + steps）'))
+        clip_v.addWidget(self._clip_rules_json)
+        self._clip_rules_status = QLabel("")
+        self._clip_rules_status.setWordWrap(True)
+        self._clip_rules_status.setAccessibleName("rules JSON 校验状态")
+        self._clip_rules_status.setStyleSheet("color:#7d8ea1; font-size:12px;")
+        clip_v.addWidget(self._clip_rules_status)
+        self._clip_rules_json.textChanged.connect(self._refresh_clip_rules_json_status)
+
         if_w = QWidget()
         if_l = QVBoxLayout(if_w)
         if_l.addWidget(
@@ -214,6 +282,15 @@ class StepEditorDialog(QDialog):
         if_l.addWidget(self._if_then)
         if_l.addWidget(QLabel("else（JSON 步骤数组）"))
         if_l.addWidget(self._if_else)
+        self._if_then.setAccessibleName("条件为真时执行的步骤数组")
+        self._if_else.setAccessibleName("条件为假时执行的步骤数组")
+        self._if_json_status = QLabel("")
+        self._if_json_status.setWordWrap(True)
+        self._if_json_status.setAccessibleName("条件分支 JSON 校验状态")
+        self._if_json_status.setStyleSheet("color:#7d8ea1; font-size:12px;")
+        if_l.addWidget(self._if_json_status)
+        self._if_then.textChanged.connect(self._refresh_if_branch_json_status)
+        self._if_else.textChanged.connect(self._refresh_if_branch_json_status)
 
         self._note_text = QLineEdit()
         self._note_text.setPlaceholderText("仅作流程说明，执行时会被跳过")
@@ -261,6 +338,15 @@ class StepEditorDialog(QDialog):
         )
         self._stack.addWidget(self._wrap_with_hint(click_w, "坐标在分辨率变化时可能失效，优先使用网页/控件定位。"))
         self._stack.addWidget(self._wrap_with_hint(paste_w, ""))
+        self._stack.addWidget(
+            self._wrap_form(
+                "从系统剪贴板读取文本并写入命名变量（不发送按键）。常与「清空剪贴板」"
+                "或「粘贴」前后搭配。",
+                read_clipboard_w,
+            ),
+        )
+        self._stack.addWidget(self._wrap_with_hint(clear_clipboard_w, ""))
+        self._stack.addWidget(clip_sw_w)
         self._stack.addWidget(if_w)
         self._stack.addWidget(self._wrap_form("仅展示在流程列表里，执行引擎可忽略。", self._note_text))
 
@@ -309,6 +395,35 @@ class StepEditorDialog(QDialog):
             if not self._sv_name.text().strip():
                 QMessageBox.warning(self, "", "请填写变量名。")
                 return
+        elif t == "clipboard_switch":
+            raw = self._clip_rules_json.toPlainText().strip() or "[]"
+            try:
+                rules = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                QMessageBox.warning(
+                    self,
+                    "剪贴板关键词分支",
+                    f"rules 必须是合法 JSON 数组：\n{exc}",
+                )
+                return
+            if not isinstance(rules, list):
+                QMessageBox.warning(self, "", "rules 顶层必须是数组。")
+                return
+            for ri, rule in enumerate(rules):
+                if not isinstance(rule, dict):
+                    QMessageBox.warning(self, "", f"rules[{ri}] 必须是 JSON 对象。")
+                    return
+                sub_steps = rule.get("steps")
+                if sub_steps is None:
+                    sub_steps = []
+                errs = validate_flow_definition({"steps": sub_steps})
+                if errs:
+                    QMessageBox.warning(
+                        self,
+                        "剪贴板关键词分支",
+                        f"rules[{ri}] 子步骤校验：\n" + "\n".join(errs[:12]),
+                    )
+                    return
         self.accept()
 
     def _wrap_form(self, hint: str, field: QWidget) -> QWidget:
@@ -337,10 +452,73 @@ class StepEditorDialog(QDialog):
         idx = self._type_combo.currentIndex()
         if idx >= 0:
             self._stack.setCurrentIndex(idx)
-        if self._type_combo.currentData() == "if":
+        if self._type_combo.currentData() in ("if", "clipboard_switch"):
             self.setMinimumHeight(self._minimum_height_if)
         else:
             self.setMinimumHeight(0)
+        self._refresh_clip_rules_json_status()
+        self._refresh_if_branch_json_status()
+
+    def _refresh_clip_rules_json_status(self) -> None:
+        if self._type_combo.currentData() != "clipboard_switch":
+            self._clip_rules_status.clear()
+            return
+        raw = self._clip_rules_json.toPlainText().strip()
+        if not raw:
+            self._clip_rules_status.setStyleSheet("color:#7d8ea1; font-size:12px;")
+            self._clip_rules_status.setText('留空时将按 "[]" 处理。')
+            return
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            self._clip_rules_status.setStyleSheet("color:#e8927a; font-size:12px;")
+            self._clip_rules_status.setText(f"JSON 语法有误：第 {exc.lineno} 行附近 — {exc.msg}")
+            return
+        self._clip_rules_status.setStyleSheet("color:#6abf8e; font-size:12px;")
+        if isinstance(parsed, list):
+            hint = (
+                f"JSON 顶层为数组，长度 {len(parsed)}。"
+                "保存时仍会逐项校验每条规则内的 steps。"
+            )
+        else:
+            hint = (
+                "JSON 虽已解析成功，但 rules 应为数组。"
+                f"当前类型：{type(parsed).__name__}。"
+            )
+        self._clip_rules_status.setText(hint)
+
+    def _refresh_if_branch_json_status(self) -> None:
+        if self._type_combo.currentData() != "if":
+            self._if_json_status.clear()
+            return
+        parts: list[str] = []
+        ok = True
+        for lab, fld in ("then", self._if_then), ("else", self._if_else):
+            raw = fld.toPlainText().strip()
+            if not raw and lab == "else":
+                raw = "[]"
+            try:
+                parsed = json.loads(raw or "[]")
+            except json.JSONDecodeError as exc:
+                ok = False
+                parts.append(
+                    f"{lab}：语法错误 — 约第 {exc.lineno} 行 {exc.msg}",
+                )
+                continue
+            if not isinstance(parsed, list):
+                ok = False
+                parts.append(
+                    f"{lab}：必须是 JSON 数组，当前为 {type(parsed).__name__}。",
+                )
+            else:
+                parts.append(f"{lab}：{len(parsed)} 个子步骤（数组）")
+
+        self._if_json_status.setStyleSheet(
+            "color:#6abf8e; font-size:12px;"
+            if ok
+            else "color:#e8927a; font-size:12px;",
+        )
+        self._if_json_status.setText(" · ".join(parts))
 
     def _load_step(self, step: dict[str, Any]) -> None:
         self._name_edit.setText(str(step.get("name", "")))
@@ -386,10 +564,32 @@ class StepEditorDialog(QDialog):
         self._click_btn.setCurrentIndex(max(0, bi))
         self._note_text.setText(str(p.get("text", p.get("note", ""))))
 
+        if t == "read_clipboard":
+            self._clip_into.setText(str(p.get("into", "")))
+            self._clip_strip.setChecked(bool(p.get("strip", True)))
+        if t == "clipboard_switch":
+            self._clip_switch_var.setText(
+                str(p.get("variable", "_clipboard")).strip() or "_clipboard",
+            )
+            self._clip_switch_ci.setChecked(bool(p.get("case_insensitive", False)))
+            rules_arr = p.get("rules") or []
+            try:
+                self._clip_rules_json.setPlainText(
+                    json.dumps(
+                        rules_arr,
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                )
+            except TypeError:
+                self._clip_rules_json.setPlainText("[]")
         if t == "if":
             self._load_if_params(p)
 
         self._stack.setCurrentIndex(idx)
+
+        self._refresh_clip_rules_json_status()
+        self._refresh_if_branch_json_status()
 
     def _load_if_params(self, p: dict[str, Any]) -> None:
         cond = p.get("condition")
@@ -522,6 +722,27 @@ class StepEditorDialog(QDialog):
             }
         elif t == "paste_clipboard":
             params = {}
+        elif t == "read_clipboard":
+            into_s = self._clip_into.text().strip()
+            params = {
+                "into": into_s if into_s else "_clipboard",
+                "strip": bool(self._clip_strip.isChecked()),
+            }
+        elif t == "clear_clipboard":
+            params = {}
+        elif t == "clipboard_switch":
+            rules_arr = json.loads(
+                self._clip_rules_json.toPlainText().strip() or "[]",
+            )
+            if not isinstance(rules_arr, list):
+                rules_arr = []
+            params = {
+                "variable": (
+                    self._clip_switch_var.text().strip() or "_clipboard"
+                ),
+                "case_insensitive": bool(self._clip_switch_ci.isChecked()),
+                "rules": rules_arr,
+            }
         elif t == "note":
             params = {"text": self._note_text.text().strip()}
         elif t == "if":

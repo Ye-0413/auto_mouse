@@ -9,13 +9,6 @@ from typing import Any
 class ConfigPayload:
     """Serialized into configs.payload_json — extend fields as UI grows."""
 
-    excel_file_path: str | None = None
-    excel_sheet_name: str | None = None
-    excel_header_row: int = 1
-    excel_selected_columns: list[str] = field(default_factory=list)
-    excel_variable_map: dict[str, str] = field(default_factory=dict)
-    excel_primary_key_column: str | None = None
-    excel_mapping_id: str | None = None
     flow_id: str | None = None
     target_window_title: str | None = None
     target_browser_title: str | None = None

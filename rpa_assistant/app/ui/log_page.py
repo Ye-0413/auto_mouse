@@ -111,9 +111,11 @@ class LogPage(QWidget):
         self._repo = ExecutionRepository(self._db_path)
 
         root = QVBoxLayout(self)
+        self.setAccessibleName("执行日志")
         bar = QHBoxLayout()
         self._btn_export = QPushButton("导出 CSV…")
         self._btn_export.setToolTip("将当前列表中的执行记录导出为 UTF-8 CSV（含 Excel 友好 BOM）")
+        self._btn_export.setAccessibleName("导出执行记录 CSV")
         self._btn_export.clicked.connect(self._export_csv)
         bar.addWidget(self._btn_export)
         self._hint = QLabel("双击一行可查看该次执行的步骤明细。")
@@ -134,10 +136,14 @@ class LogPage(QWidget):
             QHeaderView.ResizeMode.Interactive,
         )
         self._table.setAlternatingRowColors(True)
+        self._table.setAccessibleName("最近执行记录表")
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         root.addWidget(self._table)
 
         self._refresh()
+
+    def focus_default(self) -> None:
+        self._table.setFocus(Qt.FocusReason.TabFocusReason)
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)

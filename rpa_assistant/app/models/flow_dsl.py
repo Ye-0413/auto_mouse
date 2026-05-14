@@ -61,6 +61,42 @@ def _validate_step(step: Any, prefix: str) -> list[str]:
                 errors.extend(_validate_step(child, f"{prefix} {label}[{j}]"))
         return errors
 
+    if t == "clipboard_switch":
+        raw = par if isinstance(par, dict) else {}
+        rules = raw.get("rules")
+        if rules is None:
+            errors.append(f"{prefix}（clipboard_switch）需要 params.rules")
+            return errors
+        if not isinstance(rules, list):
+            errors.append(f"{prefix}（clipboard_switch）的 rules 必须是数组")
+            return errors
+        for ri, rule in enumerate(rules):
+            rp = f"{prefix} rules[{ri}]"
+            if not isinstance(rule, dict):
+                errors.append(f"{rp} 必须是对象")
+                continue
+            needles = rule.get(
+                "contains_any",
+                rule.get("contains"),
+            )
+            if needles is None:
+                errors.append(f"{rp} 需要 contains_any（或 contains）")
+            elif isinstance(needles, (str, int, float, bool)):
+                pass
+            elif isinstance(needles, list):
+                pass
+            else:
+                errors.append(f"{rp} 的 contains_any 必须是字符串或数组")
+            sub_steps = rule.get("steps")
+            if sub_steps is None:
+                sub_steps = []
+            if not isinstance(sub_steps, list):
+                errors.append(f"{rp} 的 steps 必须是数组")
+                continue
+            for j, child in enumerate(sub_steps):
+                errors.extend(_validate_step(child, f"{rp} steps[{j}]"))
+        return errors
+
     par_dict = par if isinstance(par, dict) else {}
 
     if t == "pw_inner_text":

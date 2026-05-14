@@ -1,25 +1,22 @@
-"""Graphical flow list editor (steps table + wiz-style step dialog)."""
+"""Graphical flow editor (canvas-first, Alfred-style lane)."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QComboBox,
     QDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -28,8 +25,18 @@ from rpa_assistant.app.models.common import FlowStatus
 from rpa_assistant.app.models.flow import FlowRecord
 from rpa_assistant.app.models.flow_dsl import validate_flow_definition
 from rpa_assistant.app.storage.flow_repo import FlowRepository
-from rpa_assistant.app.ui.flow.presentation import step_type_label, summarize_step
+from rpa_assistant.app.ui.flow.canvas import FlowCanvasPane
+from rpa_assistant.app.ui.flow.canvas.layout_state import normalize_canvas_layout
 from rpa_assistant.app.ui.flow.step_dialog import StepEditorDialog
+
+
+def _summarize_step(step: dict) -> str:
+    nm = str(step.get("name") or "").strip()
+    if nm:
+        return nm
+    t = str(step.get("type") or "")
+    sid = str(step.get("id") or "")[:8]
+    return f"{t} [{sid}]" if sid else t
 
 
 class FlowEditorPage(QWidget):
@@ -38,17 +45,26 @@ class FlowEditorPage(QWidget):
         self._db_path = Path(db_path)
         self._flows = FlowRepository(self._db_path)
         self._steps: list[dict] = []
+        self._canvas_layout: dict[str, Any] = {}
         self._current: FlowRecord | None = None
         self._loading = False
 
         layout = QVBoxLayout(self)
+        self.setAccessibleName("流程编辑")
 
         intro = QLabel(
-            "通过表格管理自动化步骤。点击「添加步骤」选择动作类型；双击一行可修改。"
-            "\n文本框中可写 ${列名}，执行时会换成 Excel 里对应单元格的值。",
+            "流程顺序完全由<strong>画布</strong>决定：拖拽卡片从左到右即执行顺序。<br>"
+            "双击卡片可编辑参数；在文字里写 <b>${变量名}</b>，运行时由上下文替换。<br>"
+            "保存后请到「运行」页执行。",
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color: palette(mid); padding: 4px 0;")
+        intro.setOpenExternalLinks(False)
+        intro.setStyleSheet(
+            "background-color: rgba(175, 155, 235, 0.12);"
+            "padding: 12px; border-radius: 10px;"
+            "border: 1px solid rgba(190, 170, 235, 0.28);"
+            "color: #d4cee8;",
+        )
         layout.addWidget(intro)
 
         top = QHBoxLayout()
@@ -56,14 +72,21 @@ class FlowEditorPage(QWidget):
         self._flow_combo = QComboBox()
         self._flow_combo.setMinimumWidth(260)
         self._flow_combo.currentIndexChanged.connect(self._on_flow_selected)
+        self._flow_combo.setAccessibleName("要编辑的流程")
+        self._flow_combo.setAccessibleDescription("下拉列表中选择一条流程后在画布编排步骤顺序。")
         top.addWidget(self._flow_combo, stretch=1)
         self._btn_new_flow = QPushButton("新建流程")
+        self._btn_new_flow.setAccessibleName("新建流程")
         self._btn_new_flow.clicked.connect(self._on_new_flow)
         self._btn_save_flow = QPushButton("保存")
+        self._btn_save_flow.setAccessibleName("保存流程")
+        self._btn_save_flow.setAccessibleDescription("将当前画布与表单内容写入数据库。")
         self._btn_save_flow.clicked.connect(self._on_save_flow)
         self._btn_del_flow = QPushButton("删除流程")
+        self._btn_del_flow.setAccessibleName("删除流程")
         self._btn_del_flow.clicked.connect(self._on_delete_flow)
         self._btn_reload = QPushButton("刷新列表")
+        self._btn_reload.setAccessibleName("刷新流程列表")
         self._btn_reload.clicked.connect(self._reload_flow_combo)
         top.addWidget(self._btn_new_flow)
         top.addWidget(self._btn_save_flow)
@@ -74,9 +97,11 @@ class FlowEditorPage(QWidget):
         meta = QGridLayout()
         meta.addWidget(QLabel("流程名称"), 0, 0)
         self._flow_name = QLineEdit()
+        self._flow_name.setAccessibleName("流程显示名称")
         meta.addWidget(self._flow_name, 0, 1)
         meta.addWidget(QLabel("状态"), 1, 0)
         self._status_combo = QComboBox()
+        self._status_combo.setAccessibleName("流程状态")
         for s in FlowStatus:
             self._status_combo.addItem(
                 {"draft": "草稿", "active": "启用", "archived": "已归档"}.get(s.value, s.value),
@@ -85,39 +110,48 @@ class FlowEditorPage(QWidget):
         meta.addWidget(self._status_combo, 1, 1)
         layout.addLayout(meta)
 
-        step_box = QGroupBox("步骤列表")
+        step_box = QGroupBox("步骤操作（顺序请在画布中拖拽）")
         step_lay = QVBoxLayout(step_box)
         step_bar = QHBoxLayout()
         self._btn_add = QPushButton("添加步骤")
+        self._btn_add.setAccessibleName("添加步骤")
         self._btn_add.clicked.connect(self._on_add_step)
         self._btn_edit = QPushButton("编辑")
+        self._btn_edit.setAccessibleName("编辑选中步骤")
+        self._btn_edit.setAccessibleDescription("编辑画布上当前选中的一张步骤卡片。")
         self._btn_edit.clicked.connect(self._on_edit_step)
         self._btn_remove = QPushButton("删除")
+        self._btn_remove.setAccessibleName("删除选中步骤")
         self._btn_remove.clicked.connect(self._on_remove_step)
-        self._btn_up = QPushButton("上移")
-        self._btn_up.clicked.connect(lambda: self._move_step(-1))
-        self._btn_down = QPushButton("下移")
-        self._btn_down.clicked.connect(lambda: self._move_step(1))
-        for b in (self._btn_add, self._btn_edit, self._btn_remove, self._btn_up, self._btn_down):
+        for b in (self._btn_add, self._btn_edit, self._btn_remove):
             step_bar.addWidget(b)
         step_bar.addStretch(1)
         step_lay.addLayout(step_bar)
+        layout.addWidget(step_box)
 
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["顺序", "显示名称", "类型", "说明"])
-        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self._table.verticalHeader().setVisible(False)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self._table.doubleClicked.connect(lambda *_: self._on_edit_step())
-        step_lay.addWidget(self._table)
-        layout.addWidget(step_box, stretch=1)
+        self._canvas_pane = FlowCanvasPane(self)
+        self._canvas_pane.set_edit_handler(self._on_canvas_edit_step)
+        self._canvas_pane.set_canvas_actions(
+            on_edit_index=self._on_canvas_edit_step,
+            on_delete_index=self._on_delete_step_keyboard,
+        )
+        self._canvas_pane.canvas_changed.connect(self._on_canvas_changed)
+        layout.addWidget(self._canvas_pane, stretch=1)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)
         layout.addWidget(self._hint)
 
+        self._canvas_pane.bind_state(self._steps, self._canvas_layout)
         self._reload_flow_combo(select_last=False)
+
+    def focus_default(self) -> None:
+        self._flow_combo.setFocus(Qt.FocusReason.TabFocusReason)
+
+    def _touch_canvas_bindings(self) -> None:
+        """Keep画布与当前 ``_steps``、``_canvas_layout``绑定并刷新场景。"""
+        self._canvas_pane.bind_state(self._steps, self._canvas_layout)
+        self._canvas_pane.reload_visuals()
 
     def _reload_flow_combo(self, *, select_last: bool = False) -> None:
         self._loading = True
@@ -134,8 +168,9 @@ class FlowEditorPage(QWidget):
         if not rows:
             self._current = None
             self._steps = []
+            self._canvas_layout = {}
             self._flow_name.clear()
-            self._refresh_table()
+            self._touch_canvas_bindings()
             self._hint.setText("暂无流程，请点击「新建流程」。")
             return
 
@@ -164,31 +199,16 @@ class FlowEditorPage(QWidget):
         self._flow_name.setText(rec.name)
         si = self._status_combo.findData(rec.status.value)
         self._status_combo.setCurrentIndex(max(0, si))
-        raw = rec.definition.get("steps")
+        defn = rec.definition if isinstance(rec.definition, dict) else {}
+        raw = defn.get("steps")
         self._steps = [dict(s) for s in raw] if isinstance(raw, list) else []
-        self._refresh_table()
+        raw_canvas = defn.get("canvas_layout")
+        self._canvas_layout = dict(raw_canvas) if isinstance(raw_canvas, dict) else {}
+        self._touch_canvas_bindings()
         self._hint.setText(f"已加载 {len(self._steps)} 个步骤。")
 
-    def _refresh_table(self) -> None:
-        self._table.setRowCount(len(self._steps))
-        for i, step in enumerate(self._steps):
-            t = step.get("type", "")
-            name = str(step.get("name", "")).strip()
-            self._table.setItem(i, 0, self._ro(str(i + 1)))
-            self._table.setItem(i, 1, self._ro(name or "—"))
-            self._table.setItem(i, 2, self._ro(step_type_label(t)))
-            self._table.setItem(i, 3, self._ro(summarize_step(step)))
-
-    def _ro(self, text: str) -> QTableWidgetItem:
-        it = QTableWidgetItem(text)
-        it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-        return it
-
-    def _selected_row(self) -> int:
-        indexes = self._table.selectedIndexes()
-        if not indexes:
-            return -1
-        return indexes[0].row()
+    def _on_canvas_changed(self) -> None:
+        self._hint.setText(f"画布已更新，当前 {len(self._steps)} 步。")
 
     def _on_new_flow(self) -> None:
         fid = self._flows.create("新流程", {"steps": []}, status=FlowStatus.DRAFT)
@@ -203,7 +223,13 @@ class FlowEditorPage(QWidget):
             return
         name = self._flow_name.text().strip() or "未命名流程"
         st = FlowStatus(str(self._status_combo.currentData()))
-        definition = {"steps": self._steps}
+        self._canvas_pane.flush_for_save()
+        merged_canvas = normalize_canvas_layout(self._canvas_layout, self._steps)
+        self._canvas_layout.clear()
+        self._canvas_layout.update(merged_canvas)
+        definition = dict(self._current.definition or {})
+        definition["steps"] = self._steps
+        definition["canvas_layout"] = merged_canvas
         errs = validate_flow_definition(definition)
         if errs:
             QMessageBox.warning(self, "无法保存", "\n".join(errs[:12]))
@@ -218,10 +244,11 @@ class FlowEditorPage(QWidget):
     def _on_delete_flow(self) -> None:
         if not self._current:
             return
+        n_steps = len(self._steps)
         reply = QMessageBox.question(
             self,
             "删除流程",
-            f"确定删除流程「{self._current.name}」？",
+            f"确定删除流程「{self._current.name}」及其全部 {n_steps} 个步骤？此操作不可恢复。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -231,6 +258,7 @@ class FlowEditorPage(QWidget):
         if self._flows.delete(fid):
             self._current = None
             self._steps = []
+            self._canvas_layout = {}
             self._reload_flow_combo()
             self._hint.setText("已删除。")
 
@@ -239,37 +267,61 @@ class FlowEditorPage(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self._steps.append(dlg.get_result())
-        self._refresh_table()
+        self._touch_canvas_bindings()
         self._hint.setText("已添加一步，记得保存流程。")
 
+    def _selected_step_index(self) -> int:
+        idx = self._canvas_pane.current_selected_index()
+        return idx if isinstance(idx, int) else -1
+
     def _on_edit_step(self) -> None:
-        row = self._selected_row()
+        row = self._selected_step_index()
         if row < 0 or row >= len(self._steps):
-            QMessageBox.information(self, "编辑", "请先选中一行步骤。")
+            QMessageBox.information(self, "编辑", "请先在画布中点选一个步骤卡片。")
             return
         dlg = StepEditorDialog(self, step=self._steps[row])
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self._steps[row] = dlg.get_result()
-        self._refresh_table()
+        self._touch_canvas_bindings()
 
-    def _on_remove_step(self) -> None:
-        row = self._selected_row()
+    def _on_canvas_edit_step(self, row: int) -> None:
         if row < 0 or row >= len(self._steps):
             return
-        del self._steps[row]
-        self._refresh_table()
+        dlg = StepEditorDialog(self, step=self._steps[row])
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._steps[row] = dlg.get_result()
+        self._touch_canvas_bindings()
 
-    def _move_step(self, delta: int) -> None:
-        row = self._selected_row()
-        if row < 0:
+    def _on_remove_step(self) -> None:
+        row = self._selected_step_index()
+        if row < 0 or row >= len(self._steps):
+            QMessageBox.information(self, "删除步骤", "请先在画布中点选一张步骤卡片。")
             return
-        j = row + delta
-        if j < 0 or j >= len(self._steps):
+        self._maybe_remove_step_at(row)
+
+    def _maybe_remove_step_at(self, row: int) -> None:
+        if row < 0 or row >= len(self._steps):
             return
-        self._steps[row], self._steps[j] = self._steps[j], self._steps[row]
-        self._refresh_table()
-        self._table.selectRow(j)
+        step = self._steps[row]
+        label = _summarize_step(step)
+        reply = QMessageBox.question(
+            self,
+            "删除步骤",
+            f"将从流程中移除步骤「{label}」（画布第 {row + 1} 张）。删除后请先保存流程。确定？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        del self._steps[row]
+        self._touch_canvas_bindings()
+
+    def _on_delete_step_keyboard(self, row: int) -> None:
+        if row < 0 or row >= len(self._steps):
+            return
+        self._maybe_remove_step_at(row)
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)

@@ -90,3 +90,37 @@ def test_validate_if_nested() -> None:
     }
     err_c = validate_flow_definition(bad_child)
     assert any("then[0]" in e for e in err_c)
+
+
+def test_validate_clipboard_switch_nested() -> None:
+    ok_flow = {
+        "steps": [
+            {
+                "type": "clipboard_switch",
+                "params": {
+                    "variable": "_clipboard",
+                    "rules": [
+                        {
+                            "contains_any": ["a"],
+                            "steps": [{"type": "wait", "params": {"ms": 1}}],
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+    assert validate_flow_definition(ok_flow) == []
+    bad = {
+        "steps": [
+            {
+                "type": "clipboard_switch",
+                "params": {
+                    "rules": [
+                        {"contains_any": ["x"], "steps": [{"oops": True}]},
+                    ],
+                },
+            },
+        ],
+    }
+    err = validate_flow_definition(bad)
+    assert any("steps[0]" in e for e in err)

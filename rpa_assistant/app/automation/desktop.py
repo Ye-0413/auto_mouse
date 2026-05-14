@@ -40,6 +40,25 @@ def _pyperclip_mod() -> Any:
     return _pyperclip
 
 
+def read_clipboard_contents() -> ActionResult:
+    """Return current clipboard text (may be empty string)."""
+    try:
+        txt = _pyperclip_mod().paste()
+        return ActionResult(True, value="" if txt is None else str(txt))
+    except Exception as exc:
+        _logger.exception("read_clipboard failed")
+        return ActionResult(False, str(exc))
+
+
+def clear_clipboard_buffer() -> ActionResult:
+    try:
+        _pyperclip_mod().copy("")
+        return ActionResult(True)
+    except Exception as exc:
+        _logger.exception("clear_clipboard failed")
+        return ActionResult(False, str(exc))
+
+
 def run_step(step_type: str, params: dict[str, Any]) -> ActionResult:
     """Dispatch one automation step after params are already resolved."""
     t = (step_type or "").strip()
@@ -88,6 +107,8 @@ def run_step(step_type: str, params: dict[str, Any]) -> ActionResult:
             if not text:
                 return ActionResult(False, "剪贴板为空")
             return _hotkey("ctrl+v")
+        if t == "clear_clipboard":
+            return clear_clipboard_buffer()
         if t == "note":
             return ActionResult(True)
     except Exception as exc:

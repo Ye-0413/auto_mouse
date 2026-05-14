@@ -32,16 +32,15 @@ def test_config_round_trip(tmp_path: Path) -> None:
     _db(db)
     cfg = ConfigRepository(db)
     payload = ConfigPayload(
-        excel_file_path="D:/book.xlsx",
-        excel_sheet_name="Sheet1",
         flow_id="flow-1",
+        target_window_title="记事本",
         extra={"custom": 1},
     )
     cid = cfg.create("办公配置", payload, is_default=True)
     got = cfg.get(cid)
     assert got is not None
-    assert got.payload.excel_file_path == "D:/book.xlsx"
-    assert got.payload.extra.get("custom") == 1
+    assert got.payload.flow_id == "flow-1"
+    assert got.payload.target_window_title == "记事本"
     assert cfg.get_default() is not None and cfg.get_default().id == cid
 
 

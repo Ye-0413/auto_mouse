@@ -39,10 +39,28 @@ class ConfigPage(QWidget):
         self._loading = False
 
         layout = QVBoxLayout(self)
+        self.setAccessibleName("全局配置档案")
+
+        guide = QLabel(
+            "<b>这一页保存「自动化常用选项」</b>：<br>"
+            "① <b>使用的流程</b> — 与「运行」页默认勾选一致，也可在具体页面再选<br>"
+            "② <b>超时、重试、失败截图</b> — 每次执行步骤时沿用这里的设置<br>"
+            "③ 窗口标题与浏览器 CDP 供桌面 / 浏览器类步骤使用。",
+        )
+        guide.setWordWrap(True)
+        guide.setOpenExternalLinks(False)
+        guide.setStyleSheet(
+            "background-color: rgba(255, 185, 95, 0.12);"
+            "padding: 12px; border-radius: 10px;"
+            "border: 1px solid rgba(230, 175, 110, 0.30);"
+            "color: #d8cba8;",
+        )
+        layout.addWidget(guide)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("当前配置档案"))
         self._profile_combo = QComboBox()
+        self._profile_combo.setAccessibleName("当前配置档案")
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         row.addWidget(self._profile_combo, stretch=1)
         self._btn_new = QPushButton("新建")
@@ -70,22 +88,11 @@ class ConfigPage(QWidget):
         meta.addRow(self._default_check)
         layout.addLayout(meta)
 
-        excel_box = QGroupBox("Excel（路径与列映射请在「数据预览」中修改）")
-        excel_form = QFormLayout(excel_box)
-        self._excel_path = QLabel("—")
-        self._excel_sheet = QLabel("—")
-        self._excel_header = QLabel("—")
-        self._excel_pk = QLabel("—")
-        excel_form.addRow("文件", self._excel_path)
-        excel_form.addRow("工作表", self._excel_sheet)
-        excel_form.addRow("表头行", self._excel_header)
-        excel_form.addRow("主键列", self._excel_pk)
-        layout.addWidget(excel_box)
-
         flow_box = QGroupBox("流程")
         flow_form = QFormLayout(flow_box)
         self._flow_combo = QComboBox()
         self._flow_combo.setMinimumWidth(320)
+        self._flow_combo.setAccessibleName("自动化默认使用的流程")
         flow_form.addRow("使用的流程", self._flow_combo)
         layout.addWidget(flow_box)
 
@@ -117,6 +124,7 @@ class ConfigPage(QWidget):
 
         btn_row = QHBoxLayout()
         self._btn_save = QPushButton("保存")
+        self._btn_save.setAccessibleName("保存配置")
         self._btn_save.clicked.connect(self._on_save)
         btn_row.addWidget(self._btn_save)
         btn_row.addStretch(1)
@@ -127,6 +135,9 @@ class ConfigPage(QWidget):
         layout.addWidget(self._status)
 
         self._reload_profiles(select_default=True)
+
+    def focus_default(self) -> None:
+        self._profile_combo.setFocus(Qt.FocusReason.TabFocusReason)
 
     def _reload_profiles(self, *, select_default: bool = False) -> None:
         """Reload profile combo; optionally select default or keep current id."""
@@ -185,10 +196,6 @@ class ConfigPage(QWidget):
             self._default_check.setChecked(rec.is_default)
 
             p = rec.payload
-            self._excel_path.setText(p.excel_file_path or "—")
-            self._excel_sheet.setText(p.excel_sheet_name or "—")
-            self._excel_header.setText(str(p.excel_header_row))
-            self._excel_pk.setText(p.excel_primary_key_column or "—")
 
             self._win_title.setText(p.target_window_title or "")
             self._browser_title.setText(p.target_browser_title or "")
@@ -226,13 +233,6 @@ class ConfigPage(QWidget):
         flow_s = str(flow_id) if flow_id else None
 
         return ConfigPayload(
-            excel_file_path=base.excel_file_path,
-            excel_sheet_name=base.excel_sheet_name,
-            excel_header_row=base.excel_header_row,
-            excel_selected_columns=list(base.excel_selected_columns),
-            excel_variable_map=dict(base.excel_variable_map),
-            excel_primary_key_column=base.excel_primary_key_column,
-            excel_mapping_id=base.excel_mapping_id,
             flow_id=flow_s,
             target_window_title=self._win_title.text().strip() or None,
             target_browser_title=self._browser_title.text().strip() or None,
@@ -299,16 +299,8 @@ class ConfigPage(QWidget):
             self._status.setText("删除失败。")
 
     def showEvent(self, event: QShowEvent) -> None:
-        """Refresh Excel summary and flow list when the tab is shown."""
+        """Refresh flow list when the tab is shown."""
         super().showEvent(event)
-        if self._current_id and not self._loading:
-            rec = self._cfg.get(self._current_id)
-            if rec:
-                p = rec.payload
-                self._excel_path.setText(p.excel_file_path or "—")
-                self._excel_sheet.setText(p.excel_sheet_name or "—")
-                self._excel_header.setText(str(p.excel_header_row))
-                self._excel_pk.setText(p.excel_primary_key_column or "—")
         self._reload_flow_combo()
         if self._current_id:
             rec = self._cfg.get(self._current_id)

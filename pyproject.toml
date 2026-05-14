@@ -5,12 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anything-auto"
 version = "0.1.0"
-description = "Windows-focused cross-app RPA desktop assistant (Excel batch + flows)."
+description = "Recording-first RPA desktop assistant (flows, single run, PySide6)."
 readme = "project.md"
 requires-python = ">=3.11"
 dependencies = [
   "PySide6>=6.6",
-  "openpyxl>=3.1",
   "platformdirs>=4.2",
   "pyautogui>=0.9.53",
   "pyperclip>=1.8.2",
@@ -20,7 +19,7 @@ dependencies = [
 browser = [
   "playwright>=1.40",
 ]
-# Desktop recording tab (pynput listeners). Not required for core Excel/batch flows.
+# Desktop recording tab (pynput listeners). Not required for core flows.
 recorder = [
   "pynput>=1.7",
 ]

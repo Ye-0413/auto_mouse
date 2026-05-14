@@ -41,20 +41,32 @@ class RecorderPage(QWidget):
         self._captured: list[dict] = []
 
         layout = QVBoxLayout(self)
+        self.setAccessibleName("桌面录制")
 
         intro = QLabel(
-            "在后台线程捕获本机输入事件（不上传、不 eval）。需安装 pynput。\n"
-            "左键单击记录为坐标点击；普通打字合并为「输入文字」；带 Ctrl/Alt/Cmd 的组合键记录为快捷键。\n"
-            "坐标在不同分辨率下可能失效，录制后请在「流程」页微调。",
+            "<b>把桌面操作录成自动化步骤</b>（仅保存在本机，不上传）。需可选安装 pynput。<br><br>"
+            "<b>快捷键（随时可用）：</b><br>"
+            "· <b>Ctrl+Shift+R</b> — 开始录制　 · <b>Ctrl+Shift+S</b> — 停止录制<br>"
+            "· 录制过程中还可按键盘上 <b>F12</b> 立即停止（不必切回本窗口）<br><br>"
+            "<b>会记录什么：</b> 鼠标左键点击位置、连续打字（会合并成一段文字）、Ctrl/Alt 等组合键。"
+            "录制完成后到下方保存为流程，再到「流程」页检查或微调。"
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color: palette(mid); padding: 4px 0;")
+        intro.setOpenExternalLinks(False)
+        intro.setStyleSheet(
+            "background-color: rgba(95, 215, 165, 0.10);"
+            "padding: 12px; border-radius: 10px;"
+            "border: 1px solid rgba(115, 225, 175, 0.28);"
+            "color: #b8dfcc;",
+        )
         layout.addWidget(intro)
 
         ctrl = QHBoxLayout()
-        self._btn_start = QPushButton("开始录制")
+        self._btn_start = QPushButton("开始录制 (Ctrl+Shift+R)")
+        self._btn_start.setObjectName("PrimaryButton")
+        self._btn_start.setAccessibleName("开始录制")
         self._btn_start.clicked.connect(self._on_start)
-        self._btn_stop = QPushButton("停止")
+        self._btn_stop = QPushButton("停止 (Ctrl+Shift+S 或 F12)")
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._on_stop)
         self._btn_clear = QPushButton("清空列表")
@@ -73,6 +85,7 @@ class RecorderPage(QWidget):
         save_lay.addWidget(QLabel("追加到已有流程"), 1, 0)
         self._flow_combo = QComboBox()
         self._flow_combo.setMinimumWidth(280)
+        self._flow_combo.setAccessibleName("追加目标的已有流程")
         save_lay.addWidget(self._flow_combo, 1, 1)
         btn_row = QHBoxLayout()
         self._btn_save_new = QPushButton("保存为新流程")
@@ -97,6 +110,18 @@ class RecorderPage(QWidget):
         layout.addWidget(self._hint)
 
         self._reload_flow_combo()
+
+    def focus_default(self) -> None:
+        if self._btn_start.isEnabled():
+            self._btn_start.setFocus(Qt.FocusReason.TabFocusReason)
+        else:
+            self._btn_stop.setFocus(Qt.FocusReason.TabFocusReason)
+
+    def trigger_shortcut_start(self) -> None:
+        self._on_start()
+
+    def trigger_shortcut_stop(self) -> None:
+        self._on_stop()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -139,7 +164,9 @@ class RecorderPage(QWidget):
         self._thread.finished.connect(self._on_thread_finished)
         self._thread.start()
         self._set_recording_ui(True)
-        self._hint.setText("正在录制…点击「停止」结束。")
+        self._hint.setText(
+            "正在录制… 可按 Ctrl+Shift+S、或 F12 结束（不必回到本页）。",
+        )
 
     def _on_import_failed(self, msg: str) -> None:
         QMessageBox.warning(self, "录制不可用", msg)

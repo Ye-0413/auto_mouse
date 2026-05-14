@@ -126,6 +126,17 @@ class RecorderThread(QThread):
         if self._stop.is_set():
             return
 
+        try:
+            from pynput.keyboard import Key
+        except ImportError:
+            Key = None  # type: ignore[misc,assignment]
+        if Key is not None and key == Key.f12:
+            # 全局停止录制（不写入为步骤），便于在其他窗口操作时结束
+            self._cancel_flush_timer()
+            self._flush_text_now()
+            self.request_stop()
+            return
+
         mt = mod_token(key)
         if mt:
             self._mods.add(mt)
@@ -147,9 +158,7 @@ class RecorderThread(QThread):
                 self.step_captured.emit(new_hotkey_step(hk))
             return
 
-        try:
-            from pynput.keyboard import Key
-        except ImportError:
+        if Key is None:
             return
 
         solo = special_hotkey_token(key)

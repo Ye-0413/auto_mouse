@@ -17,7 +17,9 @@ STEP_TYPE_LABELS: dict[str, str] = {
     "set_variable": "设置流程变量",
     "click_mouse": "鼠标点击",
     "paste_clipboard": "粘贴剪贴板",
-    "if": "条件分支",
+    "read_clipboard": "读取剪贴板→变量",
+    "clear_clipboard": "清空剪贴板",
+    "clipboard_switch": "剪贴板关键词分支",
     "note": "备注（不执行）",
 }
 
@@ -71,6 +73,16 @@ def summarize_step(step: dict[str, Any]) -> str:
         return f"屏幕坐标 ({p.get('x')}, {p.get('y')}) {p.get('button', 'left')}"
     if t == "paste_clipboard":
         return "向当前焦点粘贴剪贴板内容"
+    if t == "read_clipboard":
+        into = str(p.get("into", "_clipboard")).strip() or "_clipboard"
+        strip = bool(p.get("strip", True))
+        return f"读剪贴板→{into!r}{'' if strip else '（不trim）'}"
+    if t == "clear_clipboard":
+        return "清空系统剪贴板"
+    if t == "clipboard_switch":
+        vn = str(p.get("variable", "_clipboard")).strip() or "_clipboard"
+        rl = len(p.get("rules") or []) if isinstance(p.get("rules"), list) else 0
+        return f"变量 {vn!r} 关键词分支，{rl} 条规则（无匹配则静默结束）"
     if t == "if":
         c = p.get("condition")
         if isinstance(c, dict):

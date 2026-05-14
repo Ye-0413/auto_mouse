@@ -12,6 +12,10 @@ LogFn = Callable[[str], None]
 AfterStepFn = Callable[[int, dict[str, Any], ActionResult], None]
 
 
+class FlowSilentStop(Exception):
+    """Clipboard branch: no keyword match — terminate flow successfully without error."""
+
+
 class FlowRunner:
     """Execute flow steps with variable substitution and ``if`` branches."""
 
@@ -54,6 +58,9 @@ class FlowRunner:
                 stop_on_error=stop_on_error,
                 after_step=after_step,
             )
+        except FlowSilentStop:
+            self._log("剪贴板关键词未匹配 → 静默结束流程")
+            return True, ""
         finally:
             if self._pw_session is not None:
                 self._pw_session.close()
@@ -151,6 +158,123 @@ class FlowRunner:
                     return False, sub_err
                 continue
 
+            if st == "clipboard_switch":
+                raw_params = step.get("params")
+                if not isinstance(raw_params, dict) and isinstance(
+                    step.get("value"),
+                    dict,
+                ):
+                    raw_params = step["value"]
+                elif not isinstance(raw_params, dict):
+                    raw_params = {}
+                try:
+                    params = substitute_structure(
+                        raw_params,
+                        variables,
+                        strict=False,
+                    )
+                except KeyError as exc:
+                    err = f"变量未定义: {exc}"
+                    self._log(err)
+                    last_err = err
+                    self._next_after(after_step, step, ActionResult(False, err))
+                    if stop_on_error:
+                        return False, last_err
+                    continue
+
+                var_key = str(
+                    params.get("variable", "_clipboard"),
+                ).strip() or "_clipboard"
+                hay = variables.get(var_key, "")
+                hay_s = "" if hay is None else str(hay)
+                ci = bool(params.get("case_insensitive", False))
+                if ci:
+                    hay_cmp = hay_s.casefold()
+
+                rules = params.get("rules")
+                if not isinstance(rules, list):
+                    err = "clipboard_switch: params.rules 必须是数组"
+                    self._log(err)
+                    last_err = err
+                    self._next_after(after_step, step, ActionResult(False, err))
+                    if stop_on_error:
+                        return False, last_err
+                    continue
+
+                matched_steps: list[dict[str, Any]] | None = None
+                for ri, rule in enumerate(rules):
+                    if not isinstance(rule, dict):
+                        continue
+                    try:
+                        rsub = substitute_structure(
+                            rule,
+                            variables,
+                            strict=False,
+                        )
+                    except KeyError:
+                        continue
+                    if not isinstance(rsub, dict):
+                        continue
+                    needles_any = (
+                        rsub.get("contains_any")
+                        if "contains_any" in rsub
+                        else rsub.get("contains")
+                    )
+                    if needles_any is None:
+                        continue
+                    if isinstance(needles_any, str):
+                        needles = [needles_any]
+                    elif isinstance(needles_any, list):
+                        needles = needles_any
+                    else:
+                        continue
+                    sub_steps = rsub.get("steps")
+                    if sub_steps is None:
+                        sub_steps = []
+                    if not isinstance(sub_steps, list):
+                        continue
+
+                    matched = False
+                    for n in needles:
+                        n_s = "" if n is None else str(n).strip()
+                        if not n_s:
+                            continue
+                        if ci:
+                            if n_s.casefold() in hay_cmp:
+                                matched = True
+                                break
+                        elif n_s in hay_s:
+                            matched = True
+                            break
+                    if matched:
+                        matched_steps = sub_steps
+                        self._log(
+                            f"[{self._step_seq + 1}] 剪贴板分支 → 匹配规则 #{ri}",
+                        )
+                        break
+
+                self._next_after(
+                    after_step,
+                    step,
+                    ActionResult(
+                        True,
+                        "已匹配子流程" if matched_steps is not None else "无匹配（静默停止）",
+                    ),
+                )
+
+                if matched_steps is None:
+                    raise FlowSilentStop()
+
+                sub_ok, sub_err = self._run_block(
+                    matched_steps,
+                    variables,
+                    stop_on_error=stop_on_error,
+                    after_step=after_step,
+                )
+                if not sub_ok:
+                    return False, sub_err
+                continue
+
             raw_params = step.get("params")
             if not isinstance(raw_params, dict) and isinstance(
                 step.get("value"),
@@ -170,6 +294,33 @@ class FlowRunner:
                     return False, last_err
                 continue
             stt = str(st)
+
+            if st == "read_clipboard":
+                self._log(f"[{self._step_seq + 1}] 读取剪贴板 → 变量 …")
+                into_raw = params.get("into", params.get("assign_to", ""))
+                into_k = (
+                    str(into_raw).strip()
+                    if str(into_raw).strip()
+                    else "_clipboard"
+                )
+                strip_b = params.get("strip", True)
+                res_r = desktop.read_clipboard_contents()
+                self._next_after(after_step, step, res_r)
+                if not res_r.ok:
+                    last_err = res_r.message or "读取剪贴板失败"
+                    self._log(f"  ✗ {last_err}")
+                    if stop_on_error:
+                        return False, last_err
+                    continue
+                val = ""
+                if res_r.value is not None:
+                    val = str(res_r.value)
+                if strip_b:
+                    val = val.strip()
+                variables[into_k] = val
+                clip = val if len(val) <= 120 else val[:117] + "…"
+                self._log(f"  ✓ 变量 {into_k!r} ← {clip!r}")
+                continue
 
             if stt == "set_variable":
                 self._log(f"[{self._step_seq + 1}] 执行 set_variable …")
