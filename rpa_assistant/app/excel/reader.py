@@ -110,3 +110,42 @@ def load_sheet_snapshot(
         )
     finally:
         wb.close()
+
+
+def load_all_data_rows(
+    path: Path,
+    sheet_name: str,
+    *,
+    header_row_1based: int,
+) -> tuple[list[str], list[list[str]]]:
+    """Load full worksheet data rows (can be large — use with care)."""
+    path = path.expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if header_row_1based < 1:
+        raise ValueError("header_row_1based must be >= 1")
+
+    wb = load_workbook(filename=path, read_only=True, data_only=True)
+    try:
+        if sheet_name not in wb.sheetnames:
+            raise ValueError(f"Sheet not found: {sheet_name!r}")
+        ws = wb[sheet_name]
+        header_cells = next(
+            ws.iter_rows(
+                min_row=header_row_1based,
+                max_row=header_row_1based,
+                values_only=True,
+            ),
+            (),
+        )
+        headers = [_cell_str(c) for c in header_cells]
+        start_data = header_row_1based + 1
+        all_rows: list[list[str]] = []
+        for row in ws.iter_rows(min_row=start_data, values_only=True):
+            values = list(row)[: len(headers)]
+            if len(values) < len(headers):
+                values.extend([None] * (len(headers) - len(values)))
+            all_rows.append([_cell_str(v) for v in values])
+        return headers, all_rows
+    finally:
+        wb.close()

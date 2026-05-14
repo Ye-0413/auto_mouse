@@ -37,7 +37,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(FlowEditorPage(db_path), "流程")
         tabs.addTab(RecorderPage(), "录制")
         tabs.addTab(ConfigPage(db_path), "配置")
-        tabs.addTab(LogPage(), "日志")
+        tabs.addTab(LogPage(db_path), "日志")
         self.setCentralWidget(tabs)
 
         self._build_menu()

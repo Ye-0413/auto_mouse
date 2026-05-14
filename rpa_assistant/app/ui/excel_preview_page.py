@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
     QComboBox,
@@ -25,8 +26,11 @@ from PySide6.QtWidgets import (
 from rpa_assistant.app.excel.mapper import build_variable_map_default
 from rpa_assistant.app.excel.reader import load_sheet_snapshot, open_workbook_meta
 from rpa_assistant.app.excel.validator import validate_rows
+from rpa_assistant.app.models.flow_dsl import validate_flow_definition
 from rpa_assistant.app.models.config import ConfigPayload, ConfigRecord
 from rpa_assistant.app.storage.config_repo import ConfigRepository
+from rpa_assistant.app.storage.flow_repo import FlowRepository
+from rpa_assistant.app.ui.workers.batch_worker import BatchRunWorker
 
 _logger = logging.getLogger(__name__)
 
@@ -38,8 +42,12 @@ class ExcelPreviewPage(QWidget):
         super().__init__(parent)
         self._db_path = Path(db_path)
         self._repo = ConfigRepository(self._db_path)
+        self._flows = FlowRepository(self._db_path)
         self._current_file: Path | None = None
         self._config: ConfigRecord | None = None
+        self._last_headers: list[str] = []
+        self._last_preview_rows: list[list[str]] = []
+        self._worker: BatchRunWorker | None = None
 
         root = QVBoxLayout(self)
 
@@ -79,6 +87,14 @@ class ExcelPreviewPage(QWidget):
         btn_row.addWidget(self._btn_reload)
         btn_row.addWidget(self._btn_validate)
         btn_row.addWidget(self._btn_save)
+        self._btn_run_first = QPushButton("试运行首行")
+        self._btn_run_first.setToolTip("使用配置中绑定的流程，仅对当前预览的第一行数据执行一次")
+        self._btn_run_first.clicked.connect(self._on_run_first_row)
+        self._btn_run_preview = QPushButton("执行全部预览行")
+        self._btn_run_preview.setToolTip("对当前表格中的每一行预览数据依次执行（最多 500 行）")
+        self._btn_run_preview.clicked.connect(self._on_run_all_preview)
+        btn_row.addWidget(self._btn_run_first)
+        btn_row.addWidget(self._btn_run_preview)
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
@@ -103,6 +119,15 @@ class ExcelPreviewPage(QWidget):
         self._status = QLabel("就绪")
         self._status.setWordWrap(True)
         root.addWidget(self._status)
+
+        log_box = QGroupBox("执行输出（最近一轮）")
+        log_lay = QVBoxLayout(log_box)
+        self._run_log = QTextEdit()
+        self._run_log.setReadOnly(True)
+        self._run_log.setMinimumHeight(120)
+        self._run_log.setPlaceholderText("运行批量执行后，这里会显示步骤日志……")
+        log_lay.addWidget(self._run_log)
+        root.addWidget(log_box)
 
         self._on_bootstrap()
 
@@ -189,6 +214,9 @@ class ExcelPreviewPage(QWidget):
             return
 
         self._fill_preview(snap)
+
+        self._last_headers = list(snap.headers)
+        self._last_preview_rows = [list(r) for r in snap.preview_rows]
 
         payload = self._config.payload if self._config else ConfigPayload()
         self._fill_mapping_table(snap, payload)
@@ -351,3 +379,100 @@ class ExcelPreviewPage(QWidget):
         self._status.setText(
             f"已写入默认配置（{record.id}）：{self._current_file.name}",
         )
+
+    def _set_run_buttons_enabled(self, enabled: bool) -> None:
+        self._btn_run_first.setEnabled(enabled)
+        self._btn_run_preview.setEnabled(enabled)
+
+    def _on_worker_done(self, ok: int, fail: int, err: str) -> None:
+        self._set_run_buttons_enabled(True)
+        self._worker = None
+        if err:
+            QMessageBox.warning(self, "执行异常", err)
+            return
+        QMessageBox.information(self, "完成", f"成功 {ok} 行，失败 {fail} 行。")
+        self._status.setText(f"最近批量：成功 {ok}，失败 {fail}")
+
+    def _start_worker(self, data_rows: list[list[str]]) -> None:
+        cfg = self._repo.ensure_default()
+        p = cfg.payload
+        if not p.flow_id:
+            QMessageBox.warning(
+                self,
+                "未绑定流程",
+                "请先在「配置」页为当前配置选择要执行的流程。",
+            )
+            return
+        flow = self._flows.get(p.flow_id)
+        if not flow:
+            QMessageBox.warning(
+                self,
+                "",
+                "找不到配置中绑定的流程，请刷新或重新选择。",
+            )
+            return
+        steps = flow.definition.get("steps")
+        if not isinstance(steps, list) or not steps:
+            QMessageBox.warning(
+                self,
+                "",
+                "流程中没有步骤，请先到「流程」页编辑。",
+            )
+            return
+        errs = validate_flow_definition(flow.definition)
+        if errs:
+            QMessageBox.warning(self, "流程无效", "\n".join(errs[:10]))
+            return
+        _, var_map = self._collect_mapping()
+        if not self._last_headers:
+            QMessageBox.warning(
+                self,
+                "",
+                "请先点击「重新加载」以确保预览已就绪。",
+            )
+            return
+
+        if self._worker and self._worker.isRunning():
+            return
+
+        n = len(data_rows)
+        if n > 200:
+            reply = QMessageBox.question(
+                self,
+                "确认",
+                f"即将执行 {n} 行，是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self._set_run_buttons_enabled(False)
+        self._run_log.clear()
+        self._worker = BatchRunWorker(
+            self._db_path,
+            steps=list(steps),
+            headers=self._last_headers,
+            data_rows=data_rows,
+            variable_map=var_map,
+            config_id=cfg.id,
+            flow_id=p.flow_id,
+            excel_path=self._current_file,
+            sheet_name=self._active_sheet_name(),
+            parent=self,
+        )
+        self._worker.log_line.connect(self._run_log.append)
+        self._worker.finished_counts.connect(self._on_worker_done)
+        self._worker.start()
+
+    def _on_run_first_row(self) -> None:
+        if not self._last_preview_rows:
+            QMessageBox.information(self, "", "没有可执行的预览行，请先加载 Excel。")
+            return
+        self._start_worker([self._last_preview_rows[0]])
+
+    def _on_run_all_preview(self) -> None:
+        if not self._last_preview_rows:
+            QMessageBox.information(self, "", "没有可执行的预览行，请先加载 Excel。")
+            return
+        self._start_worker([list(r) for r in self._last_preview_rows])

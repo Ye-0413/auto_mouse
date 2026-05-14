@@ -118,6 +118,18 @@ class ExecutionRepository:
             ).fetchall()
         return [_row_to_execution(r) for r in rows]
 
+    def list_recent(self, limit: int = 200) -> list[ExecutionRecord]:
+        with connect(self._db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM executions
+                ORDER BY COALESCE(started_at, '') DESC, rowid DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_row_to_execution(r) for r in rows]
+
     def update(self, record: ExecutionRecord) -> None:
         vars_json = (
             json.dumps(record.variables, ensure_ascii=False) if record.variables else None
