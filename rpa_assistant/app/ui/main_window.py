@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget(self)
         tabs.addTab(ExcelPreviewPage(db_path), "数据预览")
         tabs.addTab(FlowEditorPage(db_path), "流程")
-        tabs.addTab(RecorderPage(), "录制")
+        tabs.addTab(RecorderPage(db_path), "录制")
         tabs.addTab(ConfigPage(db_path), "配置")
         tabs.addTab(LogPage(db_path), "日志")
         self.setCentralWidget(tabs)
