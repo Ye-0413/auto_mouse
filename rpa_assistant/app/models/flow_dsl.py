@@ -29,5 +29,12 @@ def validate_flow_definition(data: dict[str, Any]) -> list[str]:
         t = step.get("type")
         if not isinstance(t, str) or not t.strip():
             errors.append(f"{prefix} 缺少有效的 type")
+            continue
+        par = step.get("params")
+        if par is not None and not isinstance(par, dict):
+            errors.append(f"{prefix} 的 params 必须是对象")
+        legacy = step.get("value")
+        if legacy is not None and not isinstance(legacy, dict):
+            errors.append(f"{prefix} 的 value（旧字段）必须是对象")
 
     return errors
