@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from rpa_assistant.app.automation.result import ActionResult
 from rpa_assistant.app.core.runner import FlowRunner
@@ -127,3 +127,44 @@ def test_flow_runner_if_else_branch(mock_step) -> None:
     assert ok and err == ""
     mock_step.assert_called_once()
     assert mock_step.call_args[0][1]["ms"] == 20
+
+
+def test_flow_runner_set_variable_writes() -> None:
+    runner = FlowRunner()
+    v: dict[str, str | int] = {"a": "9"}
+    ok, err = runner.run(
+        [{"type": "set_variable", "params": {"name": "row_tag", "value": "batch-${a}"}}],
+        v,
+    )
+    assert ok and err == ""
+    assert v["row_tag"] == "batch-9"
+
+
+@patch("rpa_assistant.app.core.runner.PlaywrightSession")
+def test_flow_runner_pw_inner_text_assigns_variable(mock_sess_cls: MagicMock) -> None:
+    inst = MagicMock()
+    mock_sess_cls.return_value = inst
+    inst.run_step.return_value = ActionResult(True, "", value="  低压居民合同  ")
+    runner = FlowRunner(browser_cdp_url="http://127.0.0.1:1")
+    v: dict[str, str | int | None] = {"a": 1}
+    ok, err = runner.run(
+        [
+            {
+                "type": "pw_inner_text",
+                "params": {
+                    "into": "ctype",
+                    "text": "",
+                    "css": "tbody tr",
+                    "nth": 0,
+                    "exact": False,
+                    "timeout_ms": 999,
+                    "cdp_url": "",
+                },
+            },
+        ],
+        v,
+        after_step=lambda *_a: None,
+    )
+    assert ok and err == ""
+    assert v["ctype"] == "低压居民合同"
+    assert v["a"] == 1

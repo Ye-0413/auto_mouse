@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
+
+from rpa_assistant.app.automation.desktop import window_title_exists
 
 _MAX_REGEX_PATTERN_LEN = 400
 _MAX_REGEX_TEXT_LEN = 200_000
@@ -29,6 +32,8 @@ def evaluate_condition(cond: dict[str, Any]) -> bool:
     - ``is_empty``: ``value`` strips to empty
     - ``not_empty``
     - ``matches``: regex ``pattern`` against ``text`` (``re.search``, DOTALL)
+    - ``file_exists``: filesystem path in ``path`` (after variable substitution): file exists.
+    - ``window_exists``: Windows title substring in ``title_contains`` matches at least one window.
     """
     if not isinstance(cond, dict):
         raise ValueError("condition 必须是 JSON 对象")
@@ -66,5 +71,17 @@ def evaluate_condition(cond: dict[str, Any]) -> bool:
         if not pattern:
             raise ValueError("matches 需要非空 pattern")
         return re.search(pattern, text, flags=re.DOTALL) is not None
+
+    if op == "file_exists":
+        raw = cond.get("path", cond.get("left", ""))
+        pth = Path(_s(raw)).expanduser()
+        try:
+            pth = pth.resolve(strict=False)
+        except OSError:
+            return False
+        return pth.is_file()
+
+    if op == "window_exists":
+        return window_title_exists(_s(cond.get("title_contains", cond.get("text", ""))))
 
     raise ValueError(f"不支持的 condition.op: {op_raw!r}")

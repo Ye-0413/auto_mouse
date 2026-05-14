@@ -15,7 +15,9 @@ class BatchRunWorker(QThread):
     """Runs batch execution in a background thread."""
 
     log_line = Signal(str)
-    finished_counts = Signal(int, int, str, bool)
+    finished_counts = Signal(int, int, str, bool, str)
+    row_started_signal = Signal(object)
+    row_finished_signal = Signal(object, str, bool)
 
     def __init__(
         self,
@@ -34,11 +36,13 @@ class BatchRunWorker(QThread):
         screenshot_on_error: bool = False,
         screenshots_dir: Path | None = None,
         browser_cdp_url: str | None = None,
+        ui_preview_indices: list[int] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._db_path = db_path
         self._cancel = threading.Event()
+        self._pause = threading.Event()
         self._steps = steps
         self._headers = headers
         self._data_rows = data_rows
@@ -52,9 +56,20 @@ class BatchRunWorker(QThread):
         self._screenshot_on_error = screenshot_on_error
         self._screenshots_dir = screenshots_dir
         self._browser_cdp_url = browser_cdp_url
+        self._ui_preview_indices = ui_preview_indices
 
     def request_cancel(self) -> None:
         self._cancel.set()
+
+    def request_pause(self) -> None:
+        """Pause before starting the next data row."""
+        self._pause.set()
+
+    def request_resume(self) -> None:
+        self._pause.clear()
+
+    def is_pause_flag_set(self) -> bool:
+        return self._pause.is_set()
 
     def run(self) -> None:
         rep = ExecutionRepository(self._db_path)
@@ -62,10 +77,17 @@ class BatchRunWorker(QThread):
         def log(msg: str) -> None:
             self.log_line.emit(msg)
 
+        def on_row_started(preview_ix: int | None) -> None:
+            self.row_started_signal.emit(preview_ix)
+
+        def on_row_finished(preview_ix: int | None, label: str, ok_row: bool) -> None:
+            self.row_finished_signal.emit(preview_ix, label, ok_row)
+
         self._cancel.clear()
         try:
             headers = self._headers
             data_rows = self._data_rows
+            ui_ix = None if self._load_full_sheet else self._ui_preview_indices
             if self._load_full_sheet:
                 if not self._excel_path or not self._sheet_name:
                     raise ValueError("整表执行需要已选择的 Excel 文件与工作表")
@@ -79,7 +101,8 @@ class BatchRunWorker(QThread):
                 )
                 log(f"已加载 {len(data_rows)} 行（含可能的空行）。")
 
-            ok, fail, cancelled = run_rows_sync(
+            pause_fn = self._pause.is_set
+            ok, fail, cancelled, batch_id = run_rows_sync(
                 steps=self._steps,
                 headers=headers,
                 data_rows=data_rows,
@@ -93,8 +116,12 @@ class BatchRunWorker(QThread):
                 screenshot_on_error=self._screenshot_on_error,
                 screenshots_dir=self._screenshots_dir,
                 cancel_requested=self._cancel.is_set,
+                pause_requested=pause_fn,
                 browser_cdp_url=self._browser_cdp_url,
+                ui_preview_indices=ui_ix,
+                on_row_started=on_row_started,
+                on_row_finished=on_row_finished,
             )
-            self.finished_counts.emit(ok, fail, "", cancelled)
+            self.finished_counts.emit(ok, fail, "", cancelled, batch_id)
         except Exception as exc:
-            self.finished_counts.emit(0, 0, str(exc), False)
+            self.finished_counts.emit(0, 0, str(exc), False, "")

@@ -169,8 +169,30 @@ class FlowRunner:
                 if stop_on_error:
                     return False, last_err
                 continue
-            self._log(f"[{self._step_seq + 1}] 执行 {st} …")
             stt = str(st)
+
+            if stt == "set_variable":
+                self._log(f"[{self._step_seq + 1}] 执行 set_variable …")
+                name_raw = params.get("name", params.get("into", ""))
+                var_name = str(name_raw).strip()
+                if not var_name:
+                    err = "set_variable: 需要提供 params.name（或 into）作为变量名"
+                    self._log(err)
+                    last_err = err
+                    vr = ActionResult(False, err)
+                    self._next_after(after_step, step, vr)
+                    if stop_on_error:
+                        return False, last_err
+                    continue
+                value_s = params.get("value", "")
+                variables[var_name] = "" if value_s is None else str(value_s)
+                self._log(
+                    f"  ✓ 写入变量 {var_name!r} ← {str(variables[var_name])[:80]!r}",
+                )
+                self._next_after(after_step, step, ActionResult(True))
+                continue
+
+            self._log(f"[{self._step_seq + 1}] 执行 {st} …")
             if stt.startswith("pw_"):
                 if self._pw_session is None:
                     self._pw_session = PlaywrightSession()
@@ -181,6 +203,20 @@ class FlowRunner:
                 )
             else:
                 res = desktop.run_step(stt, params)
+
+            if res.ok and stt == "pw_inner_text":
+                into_raw = params.get("into", params.get("assign_to", ""))
+                into_key = str(into_raw).strip()
+                if into_key:
+                    captured = (
+                        str(res.value).strip()
+                        if res.value is not None
+                        else ""
+                    )
+                    variables[into_key] = captured
+                    clip = captured if len(captured) <= 120 else captured[:117] + "…"
+                    self._log(f"    → 变量 {into_key!r} ← {clip!r}")
+
             self._next_after(after_step, step, res)
             if not res.ok:
                 last_err = res.message or "步骤失败"

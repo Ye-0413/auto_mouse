@@ -13,6 +13,8 @@ STEP_TYPE_LABELS: dict[str, str] = {
     "open_file": "打开文件/文件夹",
     "pw_goto": "浏览器：打开网址(CDP)",
     "pw_click_text": "浏览器：点文本(CDP)",
+    "pw_inner_text": "浏览器：读文本→变量(CDP)",
+    "set_variable": "设置流程变量",
     "click_mouse": "鼠标点击",
     "paste_clipboard": "粘贴剪贴板",
     "if": "条件分支",
@@ -54,6 +56,17 @@ def summarize_step(step: dict[str, Any]) -> str:
         return u if len(u) <= 40 else u[:37] + "…"
     if t == "pw_click_text":
         return f"点「{p.get('text', '')}」"
+    if t == "pw_inner_text":
+        into = str(p.get("into", ""))
+        needle = str(p.get("text", ""))
+        css = str(p.get("css", p.get("selector", "")))
+        if needle:
+            src = needle if len(needle) <= 32 else needle[:29] + "…"
+            return f"读文本→{into!r}（{src}）"
+        cr = css if len(css) <= 32 else css[:29] + "…"
+        return f"读文本→{into!r}（CSS:{cr}）"
+    if t == "set_variable":
+        return f"{p.get('name', p.get('into', ''))} ← {str(p.get('value', ''))[:30]}"
     if t == "click_mouse":
         return f"屏幕坐标 ({p.get('x')}, {p.get('y')}) {p.get('button', 'left')}"
     if t == "paste_clipboard":

@@ -28,7 +28,7 @@ def test_run_rows_sync_saves_screenshot_on_failure(
             return_value=ActionResult(True),
         ) as mock_cap,
     ):
-        ok, fail, cancelled = run_rows_sync(
+        ok, fail, cancelled, _bid = run_rows_sync(
             steps=steps,
             headers=["A"],
             data_rows=[["1"]],
@@ -68,7 +68,7 @@ def test_run_rows_sync_skips_screenshot_when_disabled(
             return_value=ActionResult(True),
         ) as mock_cap,
     ):
-        ok, fail, cancelled = run_rows_sync(
+        ok, fail, cancelled, _bid = run_rows_sync(
             steps=[{"type": "wait", "params": {"ms": 0}}],
             headers=["A"],
             data_rows=[["1"]],

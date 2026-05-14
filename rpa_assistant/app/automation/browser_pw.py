@@ -192,6 +192,30 @@ class PlaywrightSession:
                     return ActionResult(False, "pw_click_text：text 为空")
                 page.get_by_text(label).first.click(timeout=timeout_ms)
                 return ActionResult(True)
+            if st == "pw_inner_text":
+                css_sel = str(
+                    params.get("css", "") or params.get("selector", "") or "",
+                ).strip()
+                text_label = str(params.get("text", "")).strip()
+                nth_raw = params.get("nth", 0)
+                try:
+                    nth_i = max(0, int(nth_raw))
+                except (TypeError, ValueError):
+                    nth_i = 0
+                exact = bool(params.get("exact", False))
+                loc: Any
+                if css_sel:
+                    loc = page.locator(css_sel).nth(nth_i)
+                elif text_label:
+                    loc = page.get_by_text(text_label, exact=exact).nth(nth_i)
+                else:
+                    return ActionResult(
+                        False,
+                        "pw_inner_text：需要 params.text（可见文案）或 params.css（选择器）",
+                    )
+                inner = loc.inner_text(timeout=timeout_ms)
+                stripped = (inner or "").strip()
+                return ActionResult(True, "", value=stripped)
             return ActionResult(False, f"未知 Playwright 步骤: {st}")
         except Exception as exc:
             return ActionResult(False, str(exc))

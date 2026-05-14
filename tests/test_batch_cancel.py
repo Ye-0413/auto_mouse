@@ -25,7 +25,7 @@ def test_run_rows_respects_cancel_before_second_row(
         "rpa_assistant.app.core.runner.desktop.run_step",
         return_value=ActionResult(True),
     ):
-        ok, fail, cancelled = run_rows_sync(
+        ok, fail, cancelled, _bid = run_rows_sync(
             steps=[{"type": "wait", "params": {"ms": 0}}],
             headers=["A"],
             data_rows=[["1"], ["2"]],

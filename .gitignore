@@ -3,8 +3,13 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-dist/
+# PyInstaller intermediates stay local (large, regenerable).
 build/
+
+# Prefer tracking only our one-folder GUI bundle via Git LFS (see .gitattributes).
+/dist/*
+!/dist/Anything_Auto/
+!/dist/Anything_Auto/** 
 *.spec.bak
 .venv/
 venv/

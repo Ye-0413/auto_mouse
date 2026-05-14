@@ -62,6 +62,44 @@ def test_playwright_session_reuses_browser() -> None:
     mock_page.get_by_text.return_value.first.click.assert_called_once()
 
 
+def test_playwright_pw_inner_text_css_reads_inner_text() -> None:
+    mock_page = MagicMock()
+    mock_loc_chain = MagicMock()
+    nth_loc = MagicMock()
+    nth_loc.inner_text.return_value = "  captured  "
+    mock_loc_chain.nth.return_value = nth_loc
+    mock_page.locator.return_value = mock_loc_chain
+
+    mock_ctx = MagicMock()
+    mock_ctx.pages = [mock_page]
+    mock_browser = MagicMock()
+    mock_browser.contexts = [mock_ctx]
+    mock_pw_instance = MagicMock()
+    mock_pw_instance.chromium.connect_over_cdp.return_value = mock_browser
+    entry = MagicMock()
+    entry.start.return_value = mock_pw_instance
+    fake_sp = MagicMock(return_value=entry)
+
+    with patch.object(browser_pw, "_try_import_playwright", return_value=(fake_sp, None)):
+        session = PlaywrightSession()
+        try:
+            r = session.run_step(
+                "pw_inner_text",
+                {
+                    "css": ".cell",
+                    "nth": 0,
+                    "cdp_url": "http://127.0.0.1:1",
+                    "timeout_ms": 1234,
+                },
+                default_cdp_url=None,
+            )
+        finally:
+            session.close()
+
+    assert r.ok
+    assert r.value == "captured"
+
+
 def test_playwright_session_unknown_step() -> None:
     mock_page = MagicMock()
     mock_ctx = MagicMock()

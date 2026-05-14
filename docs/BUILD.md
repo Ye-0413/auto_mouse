@@ -50,7 +50,9 @@ rm -rf build dist
 pyinstaller anything_auto.spec
 ```
 
-Artifacts **`dist/`** and **`build/`** are gitignored — do not commit them.
+**`build/`** stays gitignored (regenerable PyInstaller scratch). The versioned GUI bundle may live under **`dist/Anything_Auto/`** (tracked with **Git LFS** — see repo `.gitattributes`). Run `git lfs install` once, then `git lfs track` is already implied by attributes; add/commit that folder only after a clean `pyinstaller` build. Hosts such as GitHub reject plain Git blobs **>100 MB**; LFS (or release ZIPs) is required for the bundled Qt WebEngine DLLs.
+
+For a **fully offline** machine: copy the whole `dist/Anything_Auto/` directory (or install from a release archive). No network is required at runtime for core features (SQLite, Excel, desktop steps). Optional extras still need their own offline prep: Playwright ships with your build only if you bundle Chromium into the folder yourself; `open_url` may still invoke a browser that must exist locally.
 
 ## Smoke test after build
 

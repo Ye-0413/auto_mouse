@@ -59,4 +59,27 @@ def _validate_step(step: Any, prefix: str) -> list[str]:
                 continue
             for j, child in enumerate(sub):
                 errors.extend(_validate_step(child, f"{prefix} {label}[{j}]"))
+        return errors
+
+    par_dict = par if isinstance(par, dict) else {}
+
+    if t == "pw_inner_text":
+        into_raw = par_dict.get("into", "")
+        text_raw = par_dict.get("text", "") or ""
+        css_raw = (
+            par_dict.get("css", "") or par_dict.get("selector", "") or ""
+        ).strip()
+        into_s = str(into_raw).strip()
+        if not into_s:
+            errors.append(f"{prefix}（pw_inner_text）需要 params.into 作为写入的流程变量名")
+        if not css_raw.strip() and not str(text_raw).strip():
+            errors.append(
+                f"{prefix}（pw_inner_text）需要 params.text 或 params.css/selector",
+            )
+
+    if t == "set_variable":
+        nm = str(par_dict.get("name", par_dict.get("into", ""))).strip()
+        if not nm:
+            errors.append(f"{prefix}（set_variable）需要 params.name（或 into）")
+
     return errors

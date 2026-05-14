@@ -173,3 +173,22 @@ def _activate_window(title_contains: str) -> ActionResult:
     except Exception as exc:
         return ActionResult(False, f"激活窗口失败：{exc}")
     return ActionResult(True)
+
+
+def window_title_exists(title_contains: str) -> bool:
+    """Best-effort: whether any foreground window title contains substring (Windows)."""
+    substr = title_contains.strip()
+    if sys.platform != "win32" or not substr:
+        return False
+    try:
+        import pygetwindow as gw  # noqa: PLC0415
+    except ImportError:
+        return False
+    try:
+        for w in gw.getAllWindows():
+            title = getattr(w, "title", "") or ""
+            if substr in title:
+                return True
+    except Exception:
+        _logger.exception("window_title_exists failed")
+    return False

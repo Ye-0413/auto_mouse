@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -34,6 +35,8 @@ _STEP_ORDER = [
     "open_file",
     "pw_goto",
     "pw_click_text",
+    "pw_inner_text",
+    "set_variable",
     "click_mouse",
     "paste_clipboard",
     "if",
@@ -48,6 +51,8 @@ _IF_OPS = [
     "is_empty",
     "not_empty",
     "matches",
+    "file_exists",
+    "window_exists",
 ]
 
 
@@ -119,6 +124,41 @@ class StepEditorDialog(QDialog):
         pwcf.addRow("文本", self._pw_click_text)
         pwcf.addRow("CDP 覆盖（可选）", self._pw_click_cdp)
 
+        pw_inner_w = QWidget()
+        pwl = QFormLayout(pw_inner_w)
+        self._pw_inner_into = QLineEdit()
+        self._pw_inner_into.setPlaceholderText("流程变量名，例如 页面合同类型")
+        self._pw_inner_needle = QLineEdit()
+        self._pw_inner_needle.setPlaceholderText(
+            "按可见文案定位元素（与 CSS 二选一，通常更简单）",
+        )
+        self._pw_inner_css = QLineEdit()
+        self._pw_inner_css.setPlaceholderText("或使用 Playwright CSS locator（与上文二选一）")
+        self._pw_inner_nth = QSpinBox()
+        self._pw_inner_nth.setRange(0, 9_999)
+        self._pw_inner_exact_ck = QCheckBox("文案精确相等（否则子串匹配）")
+        self._pw_inner_timeout_ms = QSpinBox()
+        self._pw_inner_timeout_ms.setRange(100, 600_000)
+        self._pw_inner_timeout_ms.setValue(30_000)
+        self._pw_inner_cdp = QLineEdit()
+        self._pw_inner_cdp.setPlaceholderText("可选：http://127.0.0.1:9222")
+        pwl.addRow("写入变量 into", self._pw_inner_into)
+        pwl.addRow("可见文案 text", self._pw_inner_needle)
+        pwl.addRow("CSS locator", self._pw_inner_css)
+        pwl.addRow("nth（0 起）", self._pw_inner_nth)
+        pwl.addRow("", self._pw_inner_exact_ck)
+        pwl.addRow("超时毫秒", self._pw_inner_timeout_ms)
+        pwl.addRow("CDP 覆盖", self._pw_inner_cdp)
+
+        set_var_w = QWidget()
+        svf = QFormLayout(set_var_w)
+        self._sv_name = QLineEdit()
+        self._sv_name.setPlaceholderText("变量名")
+        self._sv_val = QLineEdit()
+        self._sv_val.setPlaceholderText("支持 ${映射列变量} ")
+        svf.addRow("变量名", self._sv_name)
+        svf.addRow("值", self._sv_val)
+
         click_w = QWidget()
         cform = QFormLayout(click_w)
         self._click_x = QSpinBox()
@@ -145,8 +185,9 @@ class StepEditorDialog(QDialog):
         if_l.addWidget(
             QLabel(
                 "根据条件选择执行「then」或「else」下方的步骤数组（JSON）。\n"
-                "比较符为 contains 时：左=全文，右=子串；matches 时：左=文本，右=正则。"
-                "\nis_empty / not_empty 仅使用左栏作为 value。",
+                "contains：左=全文，右=子串；matches：左=文本，右=正则；"
+                "is_empty / not_empty：仅左栏=value。\n"
+                "file_exists：左栏=文件路径；window_exists：左栏=窗口标题需包含的子串（Windows）。",
             ),
         )
         if_form = QFormLayout()
@@ -203,6 +244,21 @@ class StepEditorDialog(QDialog):
                 pw_click_box,
             ),
         )
+        self._stack.addWidget(
+            self._wrap_form(
+                (
+                    "Playwright：读取元素 inner_text 并写入命名变量（CDP）；"
+                    "后续步骤可对 ${变量名} 做 if 或使用。"
+                ),
+                pw_inner_w,
+            ),
+        )
+        self._stack.addWidget(
+            self._wrap_form(
+                "在运行时设置流程变量（不触发桌面自动化）。",
+                set_var_w,
+            ),
+        )
         self._stack.addWidget(self._wrap_with_hint(click_w, "坐标在分辨率变化时可能失效，优先使用网页/控件定位。"))
         self._stack.addWidget(self._wrap_with_hint(paste_w, ""))
         self._stack.addWidget(if_w)
@@ -235,6 +291,23 @@ class StepEditorDialog(QDialog):
                     "条件分支",
                     f"then / else 必须是合法 JSON 数组：\n{exc}",
                 )
+                return
+        elif t == "pw_inner_text":
+            if not self._pw_inner_into.text().strip():
+                QMessageBox.warning(self, "", "请填写写入变量 into。")
+                return
+            tn = self._pw_inner_needle.text().strip()
+            cs = self._pw_inner_css.text().strip()
+            if not tn and not cs:
+                QMessageBox.warning(
+                    self,
+                    "",
+                    "请填写「可见文案 text」或「CSS locator」其中之一。",
+                )
+                return
+        elif t == "set_variable":
+            if not self._sv_name.text().strip():
+                QMessageBox.warning(self, "", "请填写变量名。")
                 return
         self.accept()
 
@@ -295,6 +368,18 @@ class StepEditorDialog(QDialog):
         if t == "pw_click_text":
             self._pw_click_text.setText(str(p.get("text", "")))
             self._pw_click_cdp.setText(str(p.get("cdp_url", "")))
+        if t == "pw_inner_text":
+            self._pw_inner_into.setText(str(p.get("into", "")))
+            self._pw_inner_needle.setText(str(p.get("text", "")))
+            css_v = str(p.get("css", p.get("selector", "")))
+            self._pw_inner_css.setText(css_v)
+            self._pw_inner_nth.setValue(int(p.get("nth", 0)))
+            self._pw_inner_exact_ck.setChecked(bool(p.get("exact", False)))
+            self._pw_inner_timeout_ms.setValue(int(p.get("timeout_ms", 30_000)))
+            self._pw_inner_cdp.setText(str(p.get("cdp_url", "")))
+        if t == "set_variable":
+            self._sv_name.setText(str(p.get("name", p.get("into", ""))))
+            self._sv_val.setText(str(p.get("value", "")))
         self._click_x.setValue(int(p.get("x", 0)))
         self._click_y.setValue(int(p.get("y", 0)))
         bi = self._click_btn.findText(str(p.get("button", "left")))
@@ -332,6 +417,12 @@ class StepEditorDialog(QDialog):
             self._if_right.setText(str(cond.get("pattern", cond.get("right", ""))))
         elif op in ("is_empty", "not_empty"):
             self._if_left.setText(str(cond.get("value", "")))
+        elif op == "file_exists":
+            self._if_left.setText(str(cond.get("path", cond.get("left", ""))))
+        elif op == "window_exists":
+            self._if_left.setText(
+                str(cond.get("title_contains", cond.get("text", ""))),
+            )
 
         then_steps = p.get("then") or []
         else_steps = p.get("else") or []
@@ -362,6 +453,10 @@ class StepEditorDialog(QDialog):
             cond["pattern"] = right
         elif op in ("is_empty", "not_empty"):
             cond["value"] = left
+        elif op == "file_exists":
+            cond["path"] = left
+        elif op == "window_exists":
+            cond["title_contains"] = left
         then_steps = json.loads(self._if_then.toPlainText().strip() or "[]")
         else_steps = json.loads(self._if_else.toPlainText().strip() or "[]")
         if not isinstance(then_steps, list):
@@ -402,6 +497,23 @@ class StepEditorDialog(QDialog):
             cdp = self._pw_click_cdp.text().strip()
             if cdp:
                 params["cdp_url"] = cdp
+        elif t == "pw_inner_text":
+            params = {
+                "into": self._pw_inner_into.text().strip(),
+                "text": self._pw_inner_needle.text().strip(),
+                "css": self._pw_inner_css.text().strip(),
+                "nth": int(self._pw_inner_nth.value()),
+                "exact": bool(self._pw_inner_exact_ck.isChecked()),
+                "timeout_ms": int(self._pw_inner_timeout_ms.value()),
+            }
+            cdp_inner = self._pw_inner_cdp.text().strip()
+            if cdp_inner:
+                params["cdp_url"] = cdp_inner
+        elif t == "set_variable":
+            params = {
+                "name": self._sv_name.text().strip(),
+                "value": self._sv_val.text(),
+            }
         elif t == "click_mouse":
             params = {
                 "x": int(self._click_x.value()),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from rpa_assistant.app.storage.execution_repo import ExecutionRepository
 
 LogFn = Callable[[str], None]
 CancelRequestedFn = Callable[[], bool]
+PauseRequestedFn = Callable[[], bool]
 
 
 def _now() -> str:
@@ -36,33 +38,55 @@ def run_rows_sync(
     screenshot_on_error: bool = False,
     screenshots_dir: Path | None = None,
     cancel_requested: CancelRequestedFn | None = None,
+    pause_requested: PauseRequestedFn | None = None,
     browser_cdp_url: str | None = None,
-) -> tuple[int, int, bool]:
+    ui_preview_indices: list[int] | None = None,
+    on_row_started: Callable[[int | None], None] | None = None,
+    on_row_finished: Callable[[int | None, str, bool], None] | None = None,
+) -> tuple[int, int, bool, str]:
     """
     Run the same flow for each data row.
 
-    Returns (success_count, fail_count, cancelled).
+    Returns (success_count, fail_count, cancelled, batch_id).
+
+    ui_preview_indices, when set, must align 1:1 with data_rows (Preview table row index).
+
+    Pause: when pause_requested returns True, spin until it becomes False or cancel_requested.
     """
     batch_id = str(uuid.uuid4())
     ok_c = 0
     fail_c = 0
     runner = FlowRunner(log, browser_cdp_url=browser_cdp_url)
-    for row_index, row in enumerate(data_rows, start=1):
+    for row_pos, row in enumerate(data_rows, start=1):
+        while pause_requested is not None and pause_requested():
+            if cancel_requested is not None and cancel_requested():
+                log("── 用户已取消（在暂停状态中），停止后续数据行。")
+                return ok_c, fail_c, True, batch_id
+            time.sleep(0.05)
+
         if cancel_requested is not None and cancel_requested():
             log("── 用户已取消，停止后续数据行。")
-            return ok_c, fail_c, True
+            return ok_c, fail_c, True, batch_id
+
+        preview_ix: int | None = None
+        if ui_preview_indices is not None and row_pos - 1 < len(ui_preview_indices):
+            preview_ix = ui_preview_indices[row_pos - 1]
+
+        if on_row_started is not None:
+            on_row_started(preview_ix)
+
         vars_dict = row_to_variables(headers, row, variable_map)
-        log(f"── 数据行 {row_index}，变量: {vars_dict!r}")
+        log(f"── 数据行 {row_pos}，变量: {vars_dict!r}")
         ex = ExecutionRecord(
             id="",
             status=ExecutionStatus.RUNNING,
             batch_id=batch_id,
             flow_id=flow_id,
             config_id=config_id,
-            variables=vars_dict,
+            variables=dict(vars_dict),
             source_file=str(excel_path) if excel_path else None,
             source_sheet=sheet_name,
-            source_row_index=row_index,
+            source_row_index=row_pos,
             started_at=_now(),
         )
         eid = exec_repo.create_execution(ex)
@@ -74,6 +98,9 @@ def run_rows_sync(
         ) -> None:
             st_name = str(step.get("type", "") or "")
             strat = "playwright" if st_name.startswith("pw_") else "desktop"
+            out = {"ok": res.ok, "message": res.message}
+            if res.value is not None:
+                out["value"] = res.value
             sr = StepRunRecord(
                 id="",
                 execution_id=eid,
@@ -83,7 +110,7 @@ def run_rows_sync(
                 step_type=str(step.get("type", "")),
                 strategy_used=strat,
                 input_data=step,
-                output_data={"ok": res.ok, "message": res.message},
+                output_data=out,
                 error_message=None if res.ok else res.message,
                 started_at=_now(),
                 ended_at=_now(),
@@ -100,9 +127,10 @@ def run_rows_sync(
             ended.status = ExecutionStatus.SUCCESS if all_ok else ExecutionStatus.FAILED
             ended.error_message = None if all_ok else err
             ended.ended_at = _now()
+            ended.variables = dict(vars_dict)
             if not all_ok and screenshot_on_error and screenshots_dir is not None:
                 ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-                shot_name = f"{eid[:8]}_row{row_index}_{ts}.png"
+                shot_name = f"{eid[:8]}_row{row_pos}_{ts}.png"
                 shot_path = screenshots_dir / shot_name
                 cap_res = capture_screen_to_file(shot_path)
                 if cap_res.ok:
@@ -113,8 +141,13 @@ def run_rows_sync(
             elif all_ok:
                 ended.screenshot_path = None
             exec_repo.update(ended)
+
+        summary = "成功" if all_ok else "失败"
+        if on_row_finished is not None:
+            on_row_finished(preview_ix, summary, all_ok)
+
         if all_ok:
             ok_c += 1
         else:
             fail_c += 1
-    return ok_c, fail_c, False
+    return ok_c, fail_c, False, batch_id
