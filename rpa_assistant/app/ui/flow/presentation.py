@@ -10,8 +10,12 @@ STEP_TYPE_LABELS: dict[str, str] = {
     "hotkey": "快捷键",
     "activate_window": "激活窗口",
     "open_url": "打开网址",
+    "open_file": "打开文件/文件夹",
+    "pw_goto": "浏览器：打开网址(CDP)",
+    "pw_click_text": "浏览器：点文本(CDP)",
     "click_mouse": "鼠标点击",
     "paste_clipboard": "粘贴剪贴板",
+    "if": "条件分支",
     "note": "备注（不执行）",
 }
 
@@ -43,10 +47,23 @@ def summarize_step(step: dict[str, Any]) -> str:
         return f'窗口标题包含「{p.get("title_contains", "")}」'
     if t == "open_url":
         return str(p.get("url", ""))
+    if t == "open_file":
+        return str(p.get("path", p.get("file", "")))
+    if t == "pw_goto":
+        u = str(p.get("url", ""))
+        return u if len(u) <= 40 else u[:37] + "…"
+    if t == "pw_click_text":
+        return f"点「{p.get('text', '')}」"
     if t == "click_mouse":
         return f"屏幕坐标 ({p.get('x')}, {p.get('y')}) {p.get('button', 'left')}"
     if t == "paste_clipboard":
         return "向当前焦点粘贴剪贴板内容"
+    if t == "if":
+        c = p.get("condition")
+        if isinstance(c, dict):
+            op = str(c.get("op", ""))
+            return f"if {op} → then {len(p.get('then') or [])} 步 / else {len(p.get('else') or [])} 步"
+        return "条件分支"
     if t == "note":
         return str(p.get("text", ""))[:60]
     return str(p)[:60] if p else "（无参数）"
