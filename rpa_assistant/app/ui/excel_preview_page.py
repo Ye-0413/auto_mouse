@@ -26,8 +26,9 @@ from PySide6.QtWidgets import (
 from rpa_assistant.app.excel.mapper import build_variable_map_default
 from rpa_assistant.app.excel.reader import load_sheet_snapshot, open_workbook_meta
 from rpa_assistant.app.excel.validator import validate_rows
-from rpa_assistant.app.models.flow_dsl import validate_flow_definition
 from rpa_assistant.app.models.config import ConfigPayload, ConfigRecord
+from rpa_assistant.app.models.flow_dsl import validate_flow_definition
+from rpa_assistant.paths import ensure_app_dirs
 from rpa_assistant.app.storage.config_repo import ConfigRepository
 from rpa_assistant.app.storage.flow_repo import FlowRepository
 from rpa_assistant.app.ui.workers.batch_worker import BatchRunWorker
@@ -47,6 +48,7 @@ class ExcelPreviewPage(QWidget):
         self._config: ConfigRecord | None = None
         self._last_headers: list[str] = []
         self._last_preview_rows: list[list[str]] = []
+        self._last_data_row_count: int = 0
         self._worker: BatchRunWorker | None = None
 
         root = QVBoxLayout(self)
@@ -93,8 +95,21 @@ class ExcelPreviewPage(QWidget):
         self._btn_run_preview = QPushButton("执行全部预览行")
         self._btn_run_preview.setToolTip("对当前表格中的每一行预览数据依次执行（最多 500 行）")
         self._btn_run_preview.clicked.connect(self._on_run_all_preview)
+        self._btn_run_full = QPushButton("执行整张表")
+        self._btn_run_full.setToolTip(
+            "在后台线程读取整张工作表的全部数据行并依次执行（不限于 500 行预览）",
+        )
+        self._btn_run_full.clicked.connect(self._on_run_full_sheet)
+        self._btn_stop = QPushButton("停止")
+        self._btn_stop.setToolTip(
+            "请求停止：在处理下一行数据之前结束批量（当前行仍会执行完）。",
+        )
+        self._btn_stop.clicked.connect(self._on_stop_batch)
+        self._btn_stop.setEnabled(False)
         btn_row.addWidget(self._btn_run_first)
         btn_row.addWidget(self._btn_run_preview)
+        btn_row.addWidget(self._btn_run_full)
+        btn_row.addWidget(self._btn_stop)
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
@@ -217,6 +232,7 @@ class ExcelPreviewPage(QWidget):
 
         self._last_headers = list(snap.headers)
         self._last_preview_rows = [list(r) for r in snap.preview_rows]
+        self._last_data_row_count = int(snap.data_row_count)
 
         payload = self._config.payload if self._config else ConfigPayload()
         self._fill_mapping_table(snap, payload)
@@ -380,20 +396,39 @@ class ExcelPreviewPage(QWidget):
             f"已写入默认配置（{record.id}）：{self._current_file.name}",
         )
 
-    def _set_run_buttons_enabled(self, enabled: bool) -> None:
-        self._btn_run_first.setEnabled(enabled)
-        self._btn_run_preview.setEnabled(enabled)
+    def _set_batch_ui_idle(self, idle: bool) -> None:
+        self._btn_run_first.setEnabled(idle)
+        self._btn_run_preview.setEnabled(idle)
+        self._btn_run_full.setEnabled(idle)
+        self._btn_stop.setEnabled(not idle)
 
-    def _on_worker_done(self, ok: int, fail: int, err: str) -> None:
-        self._set_run_buttons_enabled(True)
+    def _on_stop_batch(self) -> None:
+        if self._worker and self._worker.isRunning():
+            self._worker.request_cancel()
+
+    def _on_worker_done(self, ok: int, fail: int, err: str, cancelled: bool) -> None:
+        self._set_batch_ui_idle(True)
         self._worker = None
         if err:
             QMessageBox.warning(self, "执行异常", err)
             return
+        if cancelled:
+            self._status.setText(f"已停止：成功 {ok} 行，失败 {fail} 行")
+            QMessageBox.information(
+                self,
+                "已停止",
+                f"成功 {ok} 行，失败 {fail} 行；后续数据行未执行。",
+            )
+            return
         QMessageBox.information(self, "完成", f"成功 {ok} 行，失败 {fail} 行。")
         self._status.setText(f"最近批量：成功 {ok}，失败 {fail}")
 
-    def _start_worker(self, data_rows: list[list[str]]) -> None:
+    def _start_worker(
+        self,
+        data_rows: list[list[str]],
+        *,
+        load_full_sheet: bool = False,
+    ) -> None:
         cfg = self._repo.ensure_default()
         p = cfg.payload
         if not p.flow_id:
@@ -435,20 +470,52 @@ class ExcelPreviewPage(QWidget):
         if self._worker and self._worker.isRunning():
             return
 
-        n = len(data_rows)
-        if n > 200:
+        if load_full_sheet:
+            if self._last_data_row_count <= 0:
+                QMessageBox.information(
+                    self,
+                    "",
+                    "当前工作表没有数据行可执行，请确认表头行号与内容。",
+                )
+                return
+            n = self._last_data_row_count
+            hint = ""
+            pv = len(self._last_preview_rows)
+            if n > pv:
+                hint = (
+                    f"\n\n说明：表格预览最多 {pv} 行，整表约 {n} 行"
+                    f"{ '（预览已截断）' if pv >= 500 else '' }。"
+                )
+            tail = f"约 {n} 行数据。"
+            if n > 200:
+                tail += " 数据量较大，耗时可能较长。"
             reply = QMessageBox.question(
                 self,
-                "确认",
-                f"即将执行 {n} 行，是否继续？",
+                "执行整张表",
+                "将从磁盘完整读取当前工作表的数据行并在后台依次执行。"
+                f"{hint}\n\n{tail}\n\n是否继续？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
+        else:
+            n = len(data_rows)
+            if n > 200:
+                reply = QMessageBox.question(
+                    self,
+                    "确认",
+                    f"即将执行 {n} 行，是否继续？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
 
-        self._set_run_buttons_enabled(False)
+        self._set_batch_ui_idle(False)
         self._run_log.clear()
+        _, _, _, shots = ensure_app_dirs()
+        cdp = (p.browser_cdp_url or "").strip() or None
         self._worker = BatchRunWorker(
             self._db_path,
             steps=list(steps),
@@ -459,6 +526,11 @@ class ExcelPreviewPage(QWidget):
             flow_id=p.flow_id,
             excel_path=self._current_file,
             sheet_name=self._active_sheet_name(),
+            header_row_1based=int(self._header_spin.value()),
+            load_full_sheet=load_full_sheet,
+            screenshot_on_error=bool(p.screenshot_on_error),
+            screenshots_dir=shots,
+            browser_cdp_url=cdp,
             parent=self,
         )
         self._worker.log_line.connect(self._run_log.append)
@@ -476,3 +548,11 @@ class ExcelPreviewPage(QWidget):
             QMessageBox.information(self, "", "没有可执行的预览行，请先加载 Excel。")
             return
         self._start_worker([list(r) for r in self._last_preview_rows])
+
+    def _on_run_full_sheet(self) -> None:
+        if not self._current_file:
+            QMessageBox.information(self, "", "请先选择并加载 Excel。")
+            return
+        if not self._active_sheet_name():
+            return
+        self._start_worker([], load_full_sheet=True)

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from rpa_assistant.app.automation.desktop import capture_screen_to_file
 from rpa_assistant.app.automation.result import ActionResult
 from rpa_assistant.app.core.runner import FlowRunner
 from rpa_assistant.app.excel.mapper import row_to_variables
@@ -13,6 +14,7 @@ from rpa_assistant.app.models.execution import ExecutionRecord, StepRunRecord
 from rpa_assistant.app.storage.execution_repo import ExecutionRepository
 
 LogFn = Callable[[str], None]
+CancelRequestedFn = Callable[[], bool]
 
 
 def _now() -> str:
@@ -31,15 +33,24 @@ def run_rows_sync(
     sheet_name: str | None,
     exec_repo: ExecutionRepository,
     log: LogFn,
-) -> tuple[int, int]:
+    screenshot_on_error: bool = False,
+    screenshots_dir: Path | None = None,
+    cancel_requested: CancelRequestedFn | None = None,
+    browser_cdp_url: str | None = None,
+) -> tuple[int, int, bool]:
     """
-    Run the same flow for each data row. Returns (success_count, fail_count).
+    Run the same flow for each data row.
+
+    Returns (success_count, fail_count, cancelled).
     """
     batch_id = str(uuid.uuid4())
     ok_c = 0
     fail_c = 0
-    runner = FlowRunner(log)
+    runner = FlowRunner(log, browser_cdp_url=browser_cdp_url)
     for row_index, row in enumerate(data_rows, start=1):
+        if cancel_requested is not None and cancel_requested():
+            log("── 用户已取消，停止后续数据行。")
+            return ok_c, fail_c, True
         vars_dict = row_to_variables(headers, row, variable_map)
         log(f"── 数据行 {row_index}，变量: {vars_dict!r}")
         ex = ExecutionRecord(
@@ -61,6 +72,8 @@ def run_rows_sync(
             step: dict[str, Any],
             res: ActionResult,
         ) -> None:
+            st_name = str(step.get("type", "") or "")
+            strat = "playwright" if st_name.startswith("pw_") else "desktop"
             sr = StepRunRecord(
                 id="",
                 execution_id=eid,
@@ -68,7 +81,7 @@ def run_rows_sync(
                 step_id=str(step.get("id", "")),
                 order_index=i,
                 step_type=str(step.get("type", "")),
-                strategy_used="desktop",
+                strategy_used=strat,
                 input_data=step,
                 output_data={"ok": res.ok, "message": res.message},
                 error_message=None if res.ok else res.message,
@@ -87,9 +100,21 @@ def run_rows_sync(
             ended.status = ExecutionStatus.SUCCESS if all_ok else ExecutionStatus.FAILED
             ended.error_message = None if all_ok else err
             ended.ended_at = _now()
+            if not all_ok and screenshot_on_error and screenshots_dir is not None:
+                ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+                shot_name = f"{eid[:8]}_row{row_index}_{ts}.png"
+                shot_path = screenshots_dir / shot_name
+                cap_res = capture_screen_to_file(shot_path)
+                if cap_res.ok:
+                    ended.screenshot_path = str(shot_path)
+                    log(f"已保存错误截图：{ended.screenshot_path}")
+                else:
+                    log(f"错误截图未保存：{cap_res.message}")
+            elif all_ok:
+                ended.screenshot_path = None
             exec_repo.update(ended)
         if all_ok:
             ok_c += 1
         else:
             fail_c += 1
-    return ok_c, fail_c
+    return ok_c, fail_c, False
