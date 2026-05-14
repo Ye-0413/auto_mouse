@@ -3,21 +3,41 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import subprocess
 import sys
 import time
 import webbrowser
+from pathlib import Path
 from typing import Any
-
-import pyautogui
-import pyperclip
 
 from rpa_assistant.app.automation.result import ActionResult
 
 _logger = logging.getLogger(__name__)
 
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.05
+_pyautogui: Any = None
+_pyperclip: Any = None
+
+
+def _pyautogui_mod() -> Any:
+    global _pyautogui
+    if _pyautogui is None:
+        import pyautogui
+
+        pyautogui.FAILSAFE = True
+        pyautogui.PAUSE = 0.05
+        _pyautogui = pyautogui
+    return _pyautogui
+
+
+def _pyperclip_mod() -> Any:
+    global _pyperclip
+    if _pyperclip is None:
+        import pyperclip
+
+        _pyperclip = pyperclip
+    return _pyperclip
 
 
 def run_step(step_type: str, params: dict[str, Any]) -> ActionResult:
@@ -32,7 +52,7 @@ def run_step(step_type: str, params: dict[str, Any]) -> ActionResult:
             text = str(params.get("text", ""))
             if not text:
                 return ActionResult(False, "input_text: 文本为空")
-            pyautogui.write(text, interval=0.02)
+            _pyautogui_mod().write(text, interval=0.02)
             return ActionResult(True)
         if t == "hotkey":
             keys = str(params.get("keys", "")).strip()
@@ -50,17 +70,21 @@ def run_step(step_type: str, params: dict[str, Any]) -> ActionResult:
                 return ActionResult(False, "open_url: 未填写网址")
             webbrowser.open(url, new=2)
             return ActionResult(True)
+        if t == "open_file":
+            raw = str(params.get("path", params.get("file", ""))).strip()
+            return _open_file_with_default_app(raw)
         if t == "click_mouse":
             x = int(params.get("x", 0))
             y = int(params.get("y", 0))
             btn = str(params.get("button", "left")).lower()
+            pa = _pyautogui_mod()
             if btn == "right":
-                pyautogui.click(x, y, button="right")
+                pa.click(x, y, button="right")
             else:
-                pyautogui.click(x, y, button="left")
+                pa.click(x, y, button="left")
             return ActionResult(True)
         if t == "paste_clipboard":
-            text = pyperclip.paste()
+            text = _pyperclip_mod().paste()
             if not text:
                 return ActionResult(False, "剪贴板为空")
             return _hotkey("ctrl+v")
@@ -70,6 +94,30 @@ def run_step(step_type: str, params: dict[str, Any]) -> ActionResult:
         _logger.exception("Automation step failed")
         return ActionResult(False, str(exc))
     return ActionResult(False, f"未知步骤类型: {t}")
+
+
+def _open_file_with_default_app(path_str: str) -> ActionResult:
+    """Open a file or folder with the OS default handler (Explorer/Finder)."""
+    if not path_str.strip():
+        return ActionResult(False, "open_file: 路径为空")
+    p = Path(path_str).expanduser()
+    try:
+        p = p.resolve()
+    except OSError:
+        return ActionResult(False, f"路径无效: {path_str}")
+    if not p.exists():
+        return ActionResult(False, f"路径不存在: {p}")
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(p))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(p)], check=True)
+        else:
+            subprocess.run(["xdg-open", str(p)], check=True)
+        return ActionResult(True)
+    except Exception as exc:
+        _logger.exception("open_file failed")
+        return ActionResult(False, str(exc))
 
 
 def _hotkey(keys: str) -> ActionResult:
@@ -88,8 +136,21 @@ def _hotkey(keys: str) -> ActionResult:
         for i, p in enumerate(norm):
             if p == "ctrl":
                 norm[i] = "command"
-    pyautogui.hotkey(*norm)
+    _pyautogui_mod().hotkey(*norm)
     return ActionResult(True)
+
+
+def capture_screen_to_file(path: Path) -> ActionResult:
+    """Save a full-screen screenshot to ``path`` (PNG). Creates parent dirs."""
+    path = path.expanduser().resolve()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img = _pyautogui_mod().screenshot()
+        img.save(str(path))
+        return ActionResult(True)
+    except Exception as exc:
+        _logger.exception("capture_screen_to_file failed")
+        return ActionResult(False, str(exc))
 
 
 def _activate_window(title_contains: str) -> ActionResult:

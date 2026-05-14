@@ -45,3 +45,48 @@ def test_validate_flow_definition() -> None:
         {"steps": [{"type": "wait"}, {"nope": True}]},
     )
     assert any("步骤 1" in e for e in errs)
+
+
+def test_validate_if_nested() -> None:
+    ok_flow = {
+        "steps": [
+            {
+                "type": "if",
+                "params": {
+                    "condition": {"op": "equals", "left": "a", "right": "b"},
+                    "then": [{"type": "wait", "params": {"ms": 0}}],
+                    "else": [],
+                },
+            },
+        ],
+    }
+    assert validate_flow_definition(ok_flow) == []
+    bad = {
+        "steps": [
+            {
+                "type": "if",
+                "params": {
+                    "condition": "not_an_object",
+                    "then": [{"type": "wait", "params": {"ms": 0}}],
+                    "else": [],
+                },
+            },
+        ],
+    }
+    err_b = validate_flow_definition(bad)
+    assert any("condition" in e for e in err_b)
+
+    bad_child = {
+        "steps": [
+            {
+                "type": "if",
+                "params": {
+                    "condition": {"op": "equals", "left": "a", "right": "b"},
+                    "then": [{"oops": True}],
+                    "else": [],
+                },
+            },
+        ],
+    }
+    err_c = validate_flow_definition(bad_child)
+    assert any("then[0]" in e for e in err_c)
