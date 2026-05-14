@@ -38,6 +38,11 @@ def _max_schema_version(conn: sqlite3.Connection) -> int:
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    # Table name must be a migration-time literal only (never user-supplied).
+    allowed = frozenset({"executions"})
+    if table not in allowed:
+        raise ValueError(f"Unsupported table for schema check: {table!r}")
+    # PRAGMA does not support bound identifiers; `table` is allow-listed above.
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(r[1] == column for r in rows)
 
