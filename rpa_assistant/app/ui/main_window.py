@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"数据库：{db_path}")
 
         tabs = QTabWidget(self)
-        tabs.addTab(ExcelPreviewPage(), "数据预览")
+        tabs.addTab(ExcelPreviewPage(db_path), "数据预览")
         tabs.addTab(FlowEditorPage(), "流程")
         tabs.addTab(RecorderPage(), "录制")
         tabs.addTab(ConfigPage(), "配置")

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -109,3 +108,14 @@ class ConfigRepository:
             cur = conn.execute("DELETE FROM configs WHERE id = ?", (config_id,))
             conn.commit()
             return cur.rowcount > 0
+
+    def ensure_default(self) -> ConfigRecord:
+        """Return the default config, creating a placeholder if missing."""
+        row = self.get_default()
+        if row:
+            return row
+        cid = self.create("默认", ConfigPayload(), is_default=True)
+        got = self.get(cid)
+        if got is None:
+            raise RuntimeError("Failed to create default config")
+        return got
